@@ -801,6 +801,12 @@ def detect_convention(sizes):
         # climb past 10 (12,14...) -- all as one continuous even ladder.
         ladder = _numeric_even_ladder_upto(sizes)
         return ("numeric-even", ladder, ladder.index("0"), ladder.index("10"))
+    if all(re.fullmatch(r"\d{1,2}-\d{1,2}", s) for s in sizes):
+        # Literal hyphenated size tokens (e.g. Veronica Beard '00-14') are a
+        # single named size, not a numeric run -- treat as their own closed
+        # ladder so complete_sizes doesn't warn "unrecognized convention".
+        ladder = sorted(set(sizes))
+        return ("literal-hyphenated", ladder, 0, len(ladder) - 1)
     try:
         nums = sorted({int(s) for s in sizes})
     except ValueError:
@@ -834,6 +840,8 @@ def complete_sizes(ordered_sizes):
     elif name == "numeric-even":
         idxs = [ladder.index("00" if str(s).strip() == "00" else str(int(s)))
                 for s in ordered_sizes]
+    elif name == "literal-hyphenated":
+        idxs = [ladder.index(str(s).strip()) for s in ordered_sizes]
     else:
         idxs = [ladder.index(int(s)) for s in ordered_sizes]
     lo, hi = min(min(idxs), b_lo), max(max(idxs), b_hi)
@@ -866,29 +874,13 @@ def _numeric_even_span(lo_token, hi_token):
     return ladder[ladder.index(lo_key):ladder.index(hi_key) + 1]
 
 def expand_size_ranges(rows):
-    """JOOR Basic Export sometimes rolls a whole run of sizes into a single
-    row, e.g. size='00-14' with quantity=2, meaning 2 units of EACH even size
-    from 00 (the rung below size 0) through 14 -- not 2 units total. Expand
-    each such row into one row per size, preserving the per-size quantity."""
+    """Sizes like '00-14' (e.g. Veronica Beard) are a single literal size
+    token, NOT a range meaning 'one of each size in between'. Just clean and
+    pass through -- no expansion."""
     out = []
     for r in rows:
-        size = clean_size(r.get("size", ""))
-        m = re.fullmatch(r"(\d{1,2})-(\d{1,2})", size)
-        if not m:
-            nr = dict(r); nr["size"] = size
-            out.append(nr)
-            continue
-        lo, hi = m.groups()
-        if not (_is_numeric_even_token(lo) and _is_numeric_even_token(hi)):
-            nr = dict(r); nr["size"] = size   # not a run we recognize; leave cleaned
-            out.append(nr)
-            continue
-        sizes = _numeric_even_span(lo, hi)
-        print(f"  NOTE: '{r.get('style_name','')}' size '{size}' read as a run "
-              f"-> expanded to {sizes} ({r.get('quantity')} unit(s) each)")
-        for s in sizes:
-            nr = dict(r); nr["size"] = s
-            out.append(nr)
+        nr = dict(r); nr["size"] = clean_size(r.get("size", ""))
+        out.append(nr)
     return out
 
 # ------------------------- pricing -------------------------------------------
@@ -1004,13 +996,7 @@ def parse_order_to_size(path):
             if not qty:
                 continue
             size_label = clean_size(raw_label)
-            m = re.fullmatch(r"(\d{1,2})-(\d{1,2})", size_label)
-            if m and _is_numeric_even_token(m.group(1)) and _is_numeric_even_token(m.group(2)):
-                run_sizes = _numeric_even_span(*m.groups())
-                print(f"  NOTE: '{style_name}' size column '{size_label}' read as a "
-                      f"run -> expanded to {run_sizes} ({qty} unit(s) each)")
-            else:
-                run_sizes = [size_label]
+            run_sizes = [size_label]
             for size_val in run_sizes:
                 long_rows.append({
                     "seller_account": vendor_raw,
