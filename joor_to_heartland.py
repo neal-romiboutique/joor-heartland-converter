@@ -1219,7 +1219,7 @@ def build_po(joor_rows, out_path):
             missing.append((r["style_number"], color, r["size"])); continue
         cost = float(r["item_price"])
         out_rows.append({
-            "PO #": "CHECK HEARTLAND HIGHEST PO#"
+            "PO #": "CHECK HEARTLAND HIGHEST PO#",
             "PO Description": po_description(r["order_number"], r.get("shipping_fee")),
             "PO Vendor": vendor,
             "PO Start Ship": r.get("start_date", ""), "PO End Ship": r.get("cancel_date", ""),
