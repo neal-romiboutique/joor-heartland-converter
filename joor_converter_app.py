@@ -140,7 +140,7 @@ def run_conversion(payload):
         stem = joor_path.stem[:40]
         try:
             with redirect_stdout(log):
-                rows, images = read_joor(joor_path)
+                rows = read_joor(joor_path)
                 print(f"read {len(rows)} JOOR line(s) from {joor_path.name}")
                 if payload["phase"] == "grids":
                     out = tdir / f"{stem}_GRIDS_IMPORT.xlsx"
