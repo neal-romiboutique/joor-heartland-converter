@@ -840,8 +840,6 @@ def complete_sizes(ordered_sizes):
     elif name == "numeric-even":
         idxs = [ladder.index("00" if str(s).strip() == "00" else str(int(s)))
                 for s in ordered_sizes]
-    elif name == "literal-hyphenated":
-        idxs = [ladder.index(str(s).strip()) for s in ordered_sizes]
     else:
         idxs = [ladder.index(int(s)) for s in ordered_sizes]
     lo, hi = min(min(idxs), b_lo), max(max(idxs), b_hi)
@@ -1111,21 +1109,26 @@ def build_grids(joor_rows, out_path):
         codes[(vendor, style_no, color)] = (vendor, style_no, code)
 
     out_rows, skipped_keys = [], set()
+    detail_lines, unrecognized = [], []
     for key, g in groups.items():
         vendor, style_no, color = key
         vendor_id = resolve_vendor_id(vendor)
         if heartland_grid_exists(vendor_id, style_no, color):
             skipped_keys.add(key)
-            print(f"  SKIP (already exists in Heartland): {style_no} / {color} ({vendor})")
+            detail_lines.append(f"  SKIP (already exists in Heartland): {style_no} / {color} ({vendor})")
             continue
         desc = title_caps(fix_mojibake(g["style_name_raw"]))
         sizes, conv = complete_sizes(g["sizes"])
         price = retail_price(g["cost"], g.get("sugg_retail"))
         src = "JOOR Sugg. Retail" if g.get("sugg_retail") else f"{MARGIN}x cost"
-        print(f"  {desc} / {color}: ordered {sorted(set(g['sizes']))} -> "
-              f"[{conv}] generated {sizes}  | price ${price} ({src})")
+         detail_lines.append(f"  {desc} / {color}: ordered {sorted(set(g['sizes']))} -> "
+                            f"[{conv}] generated {sizes}  | price ${price} ({src})")
+        if conv == "unknown":
+            unrecognized.append((desc, color, sorted(set(g["sizes"]))))
+            detail_lines.append(f"    -> Generate Items = false for this grid "
+                                f"(sizes not recognized; add items manually in Heartland).")
         if not g["season"]:
-            print(f"    NOTE: no Season available for this line; fill in manually.")
+            detail_lines.append(f"    NOTE: no Season available for this line; fill in manually.")
         row = {h: None for h in TEMPLATE_HEADERS}
         row.update({
             "Item Grid #": "-".join(codes[key]),
@@ -1138,10 +1141,20 @@ def build_grids(joor_rows, out_path):
             "Season": g["season"] or None,
             "Dimension 1": "Color", "Dimension 1 Values": color,
             "Dimension 2": "Size", "Dimension 2 Values": ",".join(sizes),
-            "Active": "true", "Generate Items": "true",
+            "Active": "true",
+            "Generate Items": "false" if conv == "unknown" else "true",
             "Active fit guide": "3",
         })
         out_rows.append(row)
+    if unrecognized:
+        print(f"WARNING: {len(unrecognized)} grid(s) had size names this converter "
+              f"doesn't recognize. Their items were NOT generated -- the grid is "
+              f"created empty and you must add sizes/items manually in Heartland:")
+        for desc, color, raw_sizes in unrecognized:
+            print(f"  - {desc} / {color}: sizes {raw_sizes}")
+        print("")
+    for line in detail_lines:
+        print(line)
     write_xlsx(out_path, TEMPLATE_HEADERS, out_rows,
                text_cols=("Item Grid #", "Style Number"), dropdowns=DROPDOWN_LISTS)
     print(f"wrote {out_path} ({len(out_rows)} grid(s))")
