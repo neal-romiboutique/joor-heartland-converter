@@ -997,7 +997,7 @@ def read_nuorder(path, vendor):
             "item_price":     _num(cell(r, "wholesale (usd)")) or 0,
             "sugg_retail":    _num(cell(r, "m.s.r.p (usd)")),
             "order_number":   "",
-            SEASON_FROM:      cell(r, "season"),
+            SEASON_FROM:      "",
         })
     print(f"  [nuorder] vendor='{vendor}'  {len(long_rows)} ordered line(s); "
           f"skipped {no_qty} zero-qty size row(s)")
@@ -1195,8 +1195,6 @@ def build_grids(joor_rows, out_path):
             unrecognized.append((desc, color, sorted(set(g["sizes"]))))
             detail_lines.append(f"    -> Generate Items = false for this grid "
                                 f"(sizes not recognized; add items manually in Heartland).")
-        if not g["season"]:
-            detail_lines.append(f"    NOTE: no Season available for this line; fill in manually.")
         row = {h: None for h in TEMPLATE_HEADERS}
         row.update({
             "Item Grid #": "-".join(codes[key]),
@@ -1206,7 +1204,7 @@ def build_grids(joor_rows, out_path):
             "Primary Vendor": vendor,
             "Style Name": f"{desc} in {color}",
             "Style Number": style_no,
-            "Season": g["season"] or None,
+            "Season": None, # We don't use seasons anymore
             "Dimension 1": "Color", "Dimension 1 Values": color,
             "Dimension 2": "Size", "Dimension 2 Values": ",".join(sizes),
             "Active": "true",
