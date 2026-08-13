@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
-        from joor_to_heartland import read_joor, read_nuorder, build_grids, build_po
+        from order_to_heartland import read_joor, read_nuorder, build_grids, build_po
 except ImportError:
     sys.exit("ERROR: joor_to_heartland.py must be in the same folder as this app.")
 
