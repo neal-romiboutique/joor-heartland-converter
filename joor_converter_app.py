@@ -16,12 +16,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
-    from joor_to_heartland import read_joor, build_grids, build_po
+        from joor_to_heartland import read_joor, read_nuorder, build_grids, build_po
 except ImportError:
     sys.exit("ERROR: joor_to_heartland.py must be in the same folder as this app.")
 
 PAGE = """<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>JOOR &rarr; Heartland Converter</title>
+<html><head><meta charset="utf-8"><title>Romi Boutique Order Converter</title>
 <style>
   :root { --ink:#2b2b2b; --soft:#8a8a8a; --line:#e3ded6; --bg:#faf8f4; --accent:#5b4636; }
   * { box-sizing:border-box; }
@@ -50,11 +50,16 @@ PAGE = """<!DOCTYPE html>
   #files { margin-top:10px; }
   .chip { display:inline-block; background:#fff; border:1px solid var(--line); border-radius:8px;
           padding:6px 12px; margin:4px 6px 0 0; font-size:13px; }
+  .field { margin-bottom:14px; display:none; }
+  .field label { display:block; font-size:13px; color:var(--soft); margin-bottom:6px; }
+  .field input { width:100%; padding:11px 12px; font-size:15px; border:1px solid var(--line);
+                 border-radius:10px; background:#fff; color:var(--ink); }
 </style></head><body>
-<h1>JOOR &rarr; Heartland <small>Romi Boutique converter</small></h1>
+<h1>Romi Boutique Order Converter <small>JOOR &amp; NuOrder &rarr; Heartland</small></h1>
 <div class="tabs">
-  <div class="tab active" id="tab-grids" onclick="setPhase('grids')">Step 1 &middot; Grids</div>
-  <div class="tab" id="tab-po" onclick="setPhase('po')">Step 2 &middot; Purchase Order</div>
+  <div class="tab active" id="tab-grids" onclick="setPhase('grids')">JOOR Grids Import</div>
+  <div class="tab" id="tab-po" onclick="setPhase('po')">JOOR PO Import</div>
+  <div class="tab" id="tab-nuorder" onclick="setPhase('nuorder')">NuOrder Grids Import</div>
 </div>
 <p class="hint" id="hint-grids">Drop the JOOR order export below (either JOOR format works &mdash;
 Basic Export or Order-to-Size). You&rsquo;ll get the <b>grid import file</b> for
@@ -64,6 +69,15 @@ Item #s are looked up live from Heartland, so no items export is needed. You&rsq
 the PO import file for Purchasing &rarr; Purchase Orders &rarr; Import. Remember: it lands
 as Pending &mdash; open it manually.</p>
 
+<p class="hint" id="hint-nuorder" style="display:none">Drop the <b>NuOrder order export</b>
+(the xlsx with the &ldquo;NuORDER Order Data&rdquo; tab). NuOrder doesn&rsquo;t put the brand
+name in the file, so type it below &mdash; it must match the vendor name in Heartland.
+You&rsquo;ll get the <b>grid import file</b> only; build the PO in Heartland by selecting
+the grids once they&rsquo;re imported.</p>
+<div class="field" id="field-vendor">
+  <label for="vendor">Vendor (exact Heartland name)</label>
+  <input type="text" id="vendor" placeholder="e.g. Mother" oninput="refresh()">
+</div>
 <div class="drop" id="drop-joor">Drag the <b>JOOR export</b> here<br>(or click to browse)</div>
 <input type="file" id="file-joor" hidden accept=".xlsx,.csv,.txt,.tsv">
 <button id="go" disabled onclick="convert()">Convert</button>
@@ -75,10 +89,14 @@ let phase = 'grids', joorFile = null;
 
 function setPhase(p) {
   phase = p;
-  document.getElementById('tab-grids').classList.toggle('active', p==='grids');
-  document.getElementById('tab-po').classList.toggle('active', p==='po');
-  document.getElementById('hint-grids').style.display = p==='grids' ? '' : 'none';
-  document.getElementById('hint-po').style.display = p==='po' ? '' : 'none';
+  for (const t of ['grids','po','nuorder']) {
+    document.getElementById('tab-'+t).classList.toggle('active', p===t);
+    document.getElementById('hint-'+t).style.display = p===t ? '' : 'none';
+  }
+  document.getElementById('field-vendor').style.display = p==='nuorder' ? 'block' : 'none';
+  const d = document.getElementById('drop-joor');
+  if (!joorFile) d.innerHTML = 'Drag the <b>' + (p==='nuorder' ? 'NuOrder' : 'JOOR') +
+                               ' export</b> here<br>(or click to browse)';
   refresh();
 }
 function wire(dropId, inputId, setter) {
@@ -93,7 +111,8 @@ function wire(dropId, inputId, setter) {
 function setJoor(f, d)  { joorFile = f;  d.classList.add('loaded'); d.innerHTML = 'JOOR file: <b>'+f.name+'</b>'; refresh(); }
 wire('drop-joor', 'file-joor', setJoor);
 function refresh() {
-  document.getElementById('go').disabled = !joorFile;
+  const needVendor = phase === 'nuorder' && !document.getElementById('vendor').value.trim();
+  document.getElementById('go').disabled = !joorFile || needVendor;
 }
 function b64(file) {
   return new Promise((res, rej) => {
@@ -104,7 +123,8 @@ function b64(file) {
 }
 async function convert() {
   const btn = document.getElementById('go'); btn.disabled = true; btn.textContent = 'Converting\u2026';
-  const body = { phase, joor: { name: joorFile.name, b64: await b64(joorFile) } };
+   const body = { phase, vendor: document.getElementById('vendor').value.trim(),
+                 joor: { name: joorFile.name, b64: await b64(joorFile) } };
   let resp;
   try {
     resp = await (await fetch('/convert', { method:'POST', body: JSON.stringify(body) })).json();
@@ -140,16 +160,20 @@ def run_conversion(payload):
         stem = joor_path.stem[:40]
         try:
             with redirect_stdout(log):
-                rows, images = read_joor(joor_path)
-                print(f"read {len(rows)} JOOR line(s) from {joor_path.name}")
-                if payload["phase"] == "grids":
-                    out = tdir / f"{stem}_GRIDS_IMPORT.xlsx"
-                    build_grids(rows, out)
-                    out_files.append(out)
+                phase = payload["phase"]
+                if phase == "nuorder":
+                    rows = read_nuorder(joor_path, payload.get("vendor", ""))
+                    print(f"read {len(rows)} NuOrder line(s) from {joor_path.name}")
                 else:
+                    rows = read_joor(joor_path)
+                    print(f"read {len(rows)} JOOR line(s) from {joor_path.name}")
+                if phase == "po":
                     out = tdir / f"{stem}_PO_IMPORT.xlsx"
                     build_po(rows, out)
-                    out_files.append(out)
+                else:
+                    out = tdir / f"{stem}_GRIDS_IMPORT.xlsx"
+                    build_grids(rows, out)
+                out_files.append(out)
         except SystemExit as e:                    # converter's sys.exit(...) messages
             print(e, file=log)
         except Exception:

@@ -740,7 +740,7 @@ def heartland_find_item(vendor_id, style_number, color, size):
         return None
 
 def color_code(color: str) -> str:
-    words = re.split(r"[\s\-]+", color.strip())
+    words = re.split(r"[\s\-/]+", color.strip())
     return "".join(w[0] for w in words if w and w[0].isalnum()).upper()
 
 def slug(s: str) -> str:
@@ -761,7 +761,7 @@ def _num(v):
 # ------------------------- size completion engine ---------------------------
 LETTER_LADDER = ["XXXS","XXS","XS","S","M","L","XL","XXL","XXXL","XXXXL"]
 LETTER_BASE = ("XS","L")
-OS_TOKENS = {"OS","O/S","ONE SIZE","ONESIZE"}
+OS_TOKENS = {"OS","O/S","ONE SIZE","ONESIZE","NA", "N/A", "N/a", "Na", "na", "n/a"}
 
 # Apparel numeric-even ladder (dresses/tops/etc): '00' is the rung one step
 # below size 0 (NOT the same as '0'); the run commonly extends above 10 to
@@ -941,6 +941,70 @@ def resolve_color(color_val, color_code_val):
         return color_code_val
     return color_val or color_code_val  # both look like codes (or one's blank): best guess
 
+# ------------------------- NuOrder support -----------------------------------
+# NuOrder's "Order Data" export is already long (one row per style/color/size),
+# so it needs a reader, not a new pipeline. Two wrinkles: its column set varies
+# between exports (some carry SKU/Long Style Number/ship dates, others carry UPC
+# and no dates), so columns are resolved by header NAME and all but a few are
+# optional; and the vendor is never in the file at all, so the caller supplies
+# it. Grids only -- NuOrder POs are built in Heartland by selecting the grids,
+# so no order number or ship dates are needed here.
+NUORDER_REQUIRED = ("style number", "name", "color", "size", "qty")
+
+def looks_like_nuorder(header_row) -> bool:
+    h = {str(c).strip().lower() for c in header_row}
+    return "_id" in h and "units per pack" in h
+
+def read_nuorder(path, vendor):
+    """NuOrder 'Order Data' xlsx -> the same long row dicts build_grids consumes."""
+    from openpyxl import load_workbook
+    wb = load_workbook(path, data_only=True)
+    ws = next((w for w in wb.worksheets if "order data" in w.title.lower()),
+              wb.worksheets[0])          # the "Summary" tab is informational only
+    rows = [[("" if c is None else str(c).strip()) for c in r]
+            for r in ws.iter_rows(values_only=True)]
+    if not rows:
+        sys.exit("ERROR: the NuOrder file appears to be empty.")
+    col = {c.lower(): i for i, c in enumerate(rows[0]) if c}
+    missing = [c for c in NUORDER_REQUIRED if c not in col]
+    if missing:
+        sys.exit(f"ERROR: this doesn't look like a NuOrder order export "
+                 f"(missing column(s): {', '.join(missing)}).")
+    if not str(vendor).strip():
+        sys.exit("ERROR: no vendor given. NuOrder doesn't put the brand name in "
+                 "the export, so it has to be typed in.")
+
+    def cell(r, name):
+        i = col.get(name)
+        return r[i] if i is not None and i < len(r) else ""
+
+    long_rows, no_qty = [], 0
+    for r in rows[1:]:
+        style_no = cell(r, "style number")
+        if not style_no:
+            continue                                    # blank / footer row
+        qty = _num(cell(r, "qty"))
+        if not qty:
+            no_qty += 1        # NuOrder lists the vendor's whole size run; rows
+            continue           # with no qty were offered, not ordered
+        long_rows.append({
+            "seller_account": vendor,
+            "style_number":   style_no,
+            "style_name":     cell(r, "name"),
+            "color":          cell(r, "color"),
+            "size":           clean_size(cell(r, "size")),
+            "quantity":       qty * (_num(cell(r, "units per pack")) or 1),
+            "item_price":     _num(cell(r, "wholesale (usd)")) or 0,
+            "sugg_retail":    _num(cell(r, "m.s.r.p (usd)")),
+            "order_number":   "",
+            SEASON_FROM:      cell(r, "season"),
+        })
+    print(f"  [nuorder] vendor='{vendor}'  {len(long_rows)} ordered line(s); "
+          f"skipped {no_qty} zero-qty size row(s)")
+    if not long_rows:
+        sys.exit("ERROR: no ordered lines found (every row had a blank Qty).")
+    return long_rows
+    
 def parse_order_to_size(path):
     """JOOR 'Order to Size' wide xlsx -> (normalized long rows, images dict)."""
     _, rows = _load_sheet_rows(path)
@@ -1019,6 +1083,10 @@ def read_joor(path):
     if p.suffix.lower() in (".xlsx", ".xlsm"):
         _, rows = _load_sheet_rows(p)
         first_hdr = [h.lower() for h in rows[0]] if rows else []
+        if looks_like_nuorder(rows[0] if rows else []):
+            sys.exit("ERROR: this is a NuOrder export, not a JOOR export.\n"
+                     "  -> use the NuOrder section of the converter, which also "
+                     "asks for the vendor name (NuOrder doesn't put it in the file).")
         if "seller_account" not in first_hdr:                    # wide format
             return parse_order_to_size(p)
         rows = [[c for c in r] for r in rows]
@@ -1121,7 +1189,7 @@ def build_grids(joor_rows, out_path):
         sizes, conv = complete_sizes(g["sizes"])
         price = retail_price(g["cost"], g.get("sugg_retail"))
         src = "JOOR Sugg. Retail" if g.get("sugg_retail") else f"{MARGIN}x cost"
-         detail_lines.append(f"  {desc} / {color}: ordered {sorted(set(g['sizes']))} -> "
+        detail_lines.append(f"  {desc} / {color}: ordered {sorted(set(g['sizes']))} -> "
                             f"[{conv}] generated {sizes}  | price ${price} ({src})")
         if conv == "unknown":
             unrecognized.append((desc, color, sorted(set(g["sizes"]))))
