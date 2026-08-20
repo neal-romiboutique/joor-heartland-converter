@@ -990,7 +990,7 @@ def read_nuorder(path, vendor):
         long_rows.append({
             "seller_account": vendor,
             "style_number":   style_no,
-            "style_name":     cell(r, "name"),
+            "style_name":     strip_style_number_prefix(cell(r, "name"), style_no),
             "color":          cell(r, "color"),
             "size":           clean_size(cell(r, "size")),
             "quantity":       qty * (_num(cell(r, "units per pack")) or 1),
@@ -1004,6 +1004,18 @@ def read_nuorder(path, vendor):
     if not long_rows:
         sys.exit("ERROR: no ordered lines found (every row had a blank Qty).")
     return long_rows
+
+def strip_style_number_prefix(style_name: str, style_number: str) -> str:
+    """Some vendors (e.g. AMO) prefix Style Name with the style number in
+    JOOR's Order Summary export: 'WFB270-1450C - EASY ARMY SLOUCH CROP'.
+    Drop it when it matches the row's own Style Number, so Description is the
+    product name alone. Only strips an exact match -- a name that merely
+    starts with digits is left intact."""
+    name, num = str(style_name).strip(), str(style_number).strip()
+    if not num:
+        return name
+    m = re.match(rf"^{re.escape(num)}\s*[-–—:]\s*(.+)$", name, re.IGNORECASE)
+    return m.group(1).strip() if m else name
     
 def parse_order_to_size(path):
     """JOOR 'Order to Size' wide xlsx -> (normalized long rows, images dict)."""
@@ -1044,6 +1056,11 @@ def parse_order_to_size(path):
         style_name = r[col["style name"]] if col["style name"] < len(r) else ""
         if not style_no or not style_name:
             continue                                   # totals / footer rows
+        clean_name = strip_style_number_prefix(style_name, style_no)
+        if clean_name != style_name:
+            print(f"  NOTE: '{style_name}': stripped the style number prefix from "
+                  f"Style Name -> '{clean_name}'.")
+            style_name = clean_name                                 # totals / footer rows
         color_raw  = r[col["color"]] if col["color"] < len(r) else ""
         code_col_idx = col.get("color code")
         color_code_raw = r[code_col_idx] if code_col_idx is not None and code_col_idx < len(r) else ""
