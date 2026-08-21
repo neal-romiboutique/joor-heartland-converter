@@ -840,6 +840,9 @@ def complete_sizes(ordered_sizes):
     elif name == "numeric-even":
         idxs = [ladder.index("00" if str(s).strip() == "00" else str(int(s)))
                 for s in ordered_sizes]
+    elif name == "literal-hyphenated":
+        # ladder is the literal string tokens themselves ('00-14'); never int()
+        idxs = [ladder.index(str(s).strip()) for s in ordered_sizes]
     else:
         idxs = [ladder.index(int(s)) for s in ordered_sizes]
     lo, hi = min(min(idxs), b_lo), max(max(idxs), b_hi)
