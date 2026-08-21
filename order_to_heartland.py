@@ -523,6 +523,25 @@ def fix_mojibake(s: str) -> str:
             continue
     return s
 
+_W_SLASH_RE = re.compile(r"(?i)\bW/")
+
+def normalize_color(raw: str) -> str:
+    """Title-case a color and render multi-color names with ampersands
+    ('BLUE/BLACK/GREEN' -> 'Blue & Black & Green'). 'W/' is shorthand for
+    'with', not a color divider, so it's protected."""
+    s = title_caps(fix_mojibake(raw))
+    s = _W_SLASH_RE.sub("\x00", s)          # shield W/ from the split
+    s = re.sub(r"\s*/\s*", " & ", s)
+    return s.replace("\x00", "W/")
+
+def _color_variants(color: str):
+    """The normalized color plus, for multi-color names, its pre-ampersand
+    slash form ('Blue & Black' -> 'Blue/Black'). Grids and items created
+    before normalize_color() existed are stored with slashes, so dedupe and
+    item lookup have to try both. Single-color names yield one variant."""
+    legacy = re.sub(r"\s*&\s*", "/", color)
+    return [color] if legacy == color else [color, legacy]
+    
 def clean_size(raw) -> str:
     """Strip a leading 'SIZE' label some vendors include in JOOR (e.g.
     'SIZE 32' -> '32', 'Size34' -> '34'), regardless of sizing convention.
@@ -598,15 +617,8 @@ def resolve_vendor_id(normalized_vendor_name: str):
     added in Heartland since vendor_id_map.py was last regenerated)."""
     return _VENDOR_ID_LOOKUP.get(_vendor_key(normalized_vendor_name))
 
-def heartland_grid_exists(vendor_id, style_number, color):
-    """Live-check whether an item grid already exists in Heartland for this
-    vendor + style number + color (query pattern confirmed against real
-    data: positive/negative controls both passed). Returns True/False, or
-    None if the check couldn't be performed (missing credentials, network
-    error, unmapped vendor) -- callers should treat None as 'include the
-    grid' rather than silently dropping a potentially-new item."""
-    if not (HEARTLAND_TOKEN and HEARTLAND_BASE_URL and vendor_id):
-        return None
+def _grid_query(vendor_id, style_number, color):
+    """One dedupe request. True/False, or None if it couldn't be performed."""
     try:
         resp = requests.get(
             f"{HEARTLAND_BASE_URL}/item_grids",
@@ -630,6 +642,27 @@ def heartland_grid_exists(vendor_id, style_number, color):
               f"'{style_number}' / '{color}'; including grid as a precaution "
               f"-- verify manually before importing.")
         return None
+
+def heartland_grid_exists(vendor_id, style_number, color):
+    """Live-check whether an item grid already exists in Heartland for this
+    vendor + style number + color. Multi-color names are checked in both the
+    current ampersand form and the legacy slash form, so a grid created
+    before the ampersand change still counts as existing. Returns True/False,
+    or None if the check couldn't be performed (missing credentials, network
+    error, unmapped vendor) -- callers should treat None as 'include the
+    grid' rather than silently dropping a potentially-new item."""
+    if not (HEARTLAND_TOKEN and HEARTLAND_BASE_URL and vendor_id):
+        return None
+    for c in _color_variants(color):
+        hit = _grid_query(vendor_id, style_number, c)
+        if hit is None:
+            return None
+        if hit:
+            if c != color:
+                print(f"  NOTE: '{style_number}' matched an existing Heartland grid "
+                      f"under the legacy color '{c}' (not '{color}').")
+            return True
+    return False
 
 # Which /api/items field carries the "Item #" Heartland's PO import expects.
 # Vendors proved id != public_id (the UI's "#" column was public_id), so this
@@ -1180,7 +1213,7 @@ def build_grids(joor_rows, out_path):
                   f"vendor code, not a color name. This export format doesn't carry a "
                   f"plain-English color column -> re-download using JOOR's 'Download "
                   f"Order Summary Excel' option instead, which does.")
-        key = (vendor, r["style_number"].strip(), title_caps(fix_mojibake(raw_color)))
+        key = (vendor, r["style_number"].strip(), normalize_color(raw_color))
         g = groups.setdefault(key, {"sizes": [], "cost": r["item_price"],
                                     "sugg_retail": r.get("sugg_retail"),
                                     "style_name_raw": r["style_name"],
@@ -1296,10 +1329,13 @@ def build_po(joor_rows, out_path):
             sys.exit(f"ERROR: couldn't load Heartland items for vendor '{vendor}'.\n"
                      "  -> check the .env credentials and network, and that this "
                      "vendor exists in vendor_id_map.py. No PO file written.")
-        color = title_caps(fix_mojibake(r["color"]))
+        color = normalize_color(r["color"])
         size = canonical_size_token(r["size"])
-        item_no = index.get((r["style_number"].strip().upper(),
-                             color.upper(), size.upper()))
+        style_key = r["style_number"].strip().upper()
+        item_no = next((index[k] for k in
+                        ((style_key, c.upper(), size.upper())
+                         for c in _color_variants(color))
+                        if k in index), None)
         if not item_no:
             missing.append((r["style_number"], color, r["size"])); continue
         cost = float(r["item_price"])
