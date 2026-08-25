@@ -796,6 +796,34 @@ LETTER_LADDER = ["XXXS","XXS","XS","S","M","L","XL","XXL","XXXL","XXXXL"]
 LETTER_BASE = ("XS","L")
 OS_TOKENS = {"OS","O/S","ONE SIZE","ONESIZE","NA", "N/A", "N/a", "Na", "na", "n/a"}
 
+# Ring ladder: 6-8 is the store's base run, 5 and 9 only when actually ordered.
+# Same semantics as LETTER_LADDER/LETTER_BASE.
+RING_LADDER = ["5","6","7","8","9"]
+RING_BASE = ("6","8")
+
+# Ring sizes are indistinguishable from apparel sizes by token alone -- an
+# all-even ring order (6,8) would otherwise match the numeric-even branch and
+# generate a 00-20 apparel ladder. The style name is the only signal that
+# travels with every export format, so detection keys off it. 's?' catches the
+# plural; the word boundary keeps 'Earring(s)', 'Herringbone', and 'Ringer'
+# from matching, which was verified against a real Jenny Bird order.
+_RING_NAME_RE = re.compile(r"(?i)\brings?\b")
+
+def looks_like_ring(style_name) -> bool:
+    """True when a line's style name says it's a ring. Deliberately narrow:
+    a false positive puts apparel on a 5-9 ladder, so prefer missing an
+    oddly-named ring (it falls back to today's behavior) over claiming one."""
+    return bool(_RING_NAME_RE.search(str(style_name or "")))
+
+def _size_encoded_in_style_number(style_number, sizes) -> bool:
+    """True when the vendor puts the ring size in the style number itself, so
+    each size is its own style (Jenny Bird: 'JB4014-6-HPG-W' is the size 6,
+    'JB4014-7-HPG-W' the size 7). build_grids groups by style number, so these
+    are separate grids and completing each to the full 6-8 base run would
+    create the same physical ring three times over, once per grid."""
+    parts = re.split(r"[-_/ ]+", str(style_number).strip())
+    return any(canonical_size_token(s) in parts for s in sizes)
+
 # Apparel numeric-even ladder (dresses/tops/etc): '00' is the rung one step
 # below size 0 (NOT the same as '0'); the run commonly extends above 10 to
 # 12/14/16/18+. Kept as strings throughout so '00' stays distinct from '0'.
@@ -821,14 +849,21 @@ def _numeric_even_ladder_upto(sizes):
         ladder.append(str(last_val))
     return ladder
 
-def detect_convention(sizes):
-    """Return (name, ladder, base_lo_idx, base_hi_idx) or fallback."""
+def detect_convention(sizes, is_ring=False):
+    """Return (name, ladder, base_lo_idx, base_hi_idx) or fallback.
+    is_ring comes from the style name (see looks_like_ring) because ring and
+    apparel size tokens are identical -- without it, '6,8' is ambiguous."""
     up = [s.upper() for s in sizes]
     if all(s in OS_TOKENS for s in up):
         return ("os", ["OS"], 0, 0)
     if all(s in LETTER_LADDER for s in up):
         return ("letters", LETTER_LADDER,
                 LETTER_LADDER.index(LETTER_BASE[0]), LETTER_LADDER.index(LETTER_BASE[1]))
+    # MUST precede the numeric branches: numeric-even would claim an all-even
+    # ring order (6,8) and hand back a 00-20 apparel ladder.
+    if is_ring and all(canonical_size_token(s) in RING_LADDER for s in sizes):
+        return ("ring", RING_LADDER,
+                RING_LADDER.index(RING_BASE[0]), RING_LADDER.index(RING_BASE[1]))
     if all(_is_numeric_even_token(s) for s in sizes):
         # Handles plain runs (2,4,6,8), sizes that dip to '00', and runs that
         # climb past 10 (12,14...) -- all as one continuous even ladder.
@@ -859,9 +894,9 @@ def detect_convention(sizes):
         return ("euro-70-90", ladder, ladder.index(70), ladder.index(90))
     return ("unknown", None, None, None)
 
-def complete_sizes(ordered_sizes):
+def complete_sizes(ordered_sizes, is_ring=False):
     """Continuous ladder span from min(base, ordered) to max(base, ordered)."""
-    name, ladder, b_lo, b_hi = detect_convention(ordered_sizes)
+    name, ladder, b_lo, b_hi = detect_convention(ordered_sizes, is_ring)
     if name == "os":
         return ["OS"], name
     if name == "unknown":
@@ -876,6 +911,10 @@ def complete_sizes(ordered_sizes):
     elif name == "literal-hyphenated":
         # ladder is the literal string tokens themselves ('00-14'); never int()
         idxs = [ladder.index(str(s).strip()) for s in ordered_sizes]
+    elif name == "ring":
+        # string ladder like letters, but the tokens are digits -- go through
+        # canonical_size_token so '07'/'SIZE 7' land on the same rung as '7'
+        idxs = [ladder.index(canonical_size_token(s)) for s in ordered_sizes]
     else:
         idxs = [ladder.index(int(s)) for s in ordered_sizes]
     lo, hi = min(min(idxs), b_lo), max(max(idxs), b_hi)
@@ -1220,6 +1259,7 @@ def build_grids(joor_rows, out_path):
                                     "sugg_retail": r.get("sugg_retail"),
                                     "style_name_raw": r["style_name"],
                                     "raw_key": (r["style_number"].strip(), r["color"]),
+                                    "is_ring": looks_like_ring(r["style_name"]),
                                     "season": str(r.get(SEASON_FROM, "") or "").strip()})
         g["sizes"].append(str(r["size"]).strip())
 
@@ -1241,7 +1281,17 @@ def build_grids(joor_rows, out_path):
             detail_lines.append(f"  SKIP (already exists in Heartland): {style_no} / {color} ({vendor})")
             continue
         desc = title_caps(fix_mojibake(g["style_name_raw"]))
-        sizes, conv = complete_sizes(g["sizes"])
+        if g["is_ring"] and _size_encoded_in_style_number(style_no, g["sizes"]):
+            # One style number per size: complete nothing, or every sibling
+            # grid would repeat the whole 6-8 base run.
+            sizes = sorted({canonical_size_token(s) for s in g["sizes"]},
+                           key=_size_sort_key)
+            conv = "ring (size in style number)"
+            print(f"  NOTE: '{desc}' ({style_no}): this vendor puts the ring size in "
+                  f"the style number, so each size is its own grid -- generating only "
+                  f"the ordered size {sizes}, not the 6-8 base run.")
+        else:
+            sizes, conv = complete_sizes(g["sizes"], g["is_ring"])
         price = retail_price(g["cost"], g.get("sugg_retail"))
         src = "JOOR Sugg. Retail" if g.get("sugg_retail") else f"{MARGIN}x cost"
         detail_lines.append(f"  {desc} / {color}: ordered {sorted(set(g['sizes']))} -> "
