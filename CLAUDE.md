@@ -63,7 +63,7 @@ NuOrder is grids-only by design; its POs are built by hand in Heartland.
 - `expand_size_ranges` deliberately does **not** expand: a token like `00-14` (Veronica Beard) is one literal size, not a run.
 - **Pricing** — JOOR's Sugg. Retail when present, otherwise `MARGIN` (2.4) × cost, always ceiled to whole dollars. Note that JOOR's Order-to-Size export writes `WholeSale` pre-rounded to whole dollars: a vendor pricing at retail ÷ 2.2 (Jenny Bird) exports 108 → 50 while their UI displays 49.00. The cost is lossy on arrival, and `ceil_dollars` is not the cause — don't "fix" it there.
 - **Colors** (`normalize_color`) title-case and join multi-color names with ampersands (`BLUE/BLACK` → `Blue & Black`), protecting `W/` as shorthand for "with". Grids created before this change are stored with slashes, so `_color_variants` retries the legacy slash form on dedupe and item lookup.
-- **Vendor resolution** (`normalize_vendor`) matches against the hardcoded `KNOWN_VENDOR_NAMES` list via an accent/case/punctuation-stripping key. The point is to hit an *exact existing* Heartland vendor name — a near miss creates a duplicate vendor record on import. Unmatched vendors warn and fall through to a guess. Regenerate the list when vendors are added in Heartland; use `VENDOR_MAP` for one-off overrides.
+- **Vendor resolution** (`normalize_vendor`) matches against `_VENDOR_LOOKUP` via an accent/case/punctuation-stripping key (`_vendor_key`). The point is to hit an *exact existing* Heartland vendor name — a near miss creates a duplicate vendor record on import. Unmatched vendors warn and fall through to a guess. Use `VENDOR_MAP` for one-off overrides.
 - `TEMPLATE_HEADERS` (84 columns) is Heartland's official template verbatim — do not reorder, rename, or trim it. `DROPDOWN_LISTS` columns render as in-cell dropdowns via a hidden `Lists` sheet so the human reviewer picks controlled values instead of typing.
 - `PO #` is written as the literal placeholder `CHECK HEARTLAND HIGHEST PO#`: Heartland requires the field on import but won't auto-number, so the user fixes it manually. The real order number goes in `PO Description`.
 
@@ -81,9 +81,17 @@ The `api_testing/api_test_*.py` scripts are the record of how these were determi
 
 `build_po` fetches one paginated index of all of a vendor's items rather than one request per order line, and clears `_ITEM_INDEX_CACHE` at the start of each run because the grids import likely just created new items. API failures return `None` and are treated as "include the grid / stop the PO" — never as "silently drop the line".
 
-### vendor_id_map.py
+### The vendor list refreshes itself
 
-`order_to_heartland.py` imports `VENDOR_ID_MAP` from a sibling `vendor_id_map.py`, which is **gitignored** and currently only exists in `api_testing/`. Without it at the repo root, every live dedupe and item lookup is skipped: grids are always generated (never checked against existing ones) and `build_po` exits with an error. `api_test_6.py` writes it into `api_testing/`, so it must be copied or symlinked up to the root.
+`refresh_vendor_lists()` runs at the top of `build_grids` and `build_po` and pulls every vendor from `/api/purchasing/vendors` (~450 vendors, ~3s), rebuilding **both** `_VENDOR_LOOKUP` (exact name for the import file) and `_VENDOR_ID_LOOKUP` (internal id for API calls) from that one response via `_rebuild_vendor_lookups`. New vendors appear in Heartland weekly and a stale list is expensive in both directions: an unknown name gets a guessed spelling that creates a duplicate vendor record on import, and an unmapped id silently disables dedupe.
+
+Three properties worth preserving:
+
+- **In memory only.** `vendor_id_map.py` is never rewritten, so every clone reads the live list straight from the API and no machine needs write access to the repo — which also keeps the shop machine git-clean so `Pull_Updates.command` can't hit a merge conflict.
+- **Throttled by wall clock**, not a once-per-process flag (`VENDOR_REFRESH_SECONDS`, 24h). `converter_app.py` is a long-running server; a per-process flag would refresh at first use and then go stale for as long as the window stays open.
+- **The clock only advances on success**, so a dropped connection retries on the next run instead of pinning the stale list for a day.
+
+Any failure (offline, bad token, empty response) falls back to the committed snapshot and prints a NOTE — an empty API response must never wipe the list. `KNOWN_VENDOR_NAMES` and `vendor_id_map.py` are now only that offline baseline; they are allowed to age, and `api_testing/api_test_6.py` regenerates the latter at the repo root when you want it fresher. Live refresh requires `.env` on that machine — a clone without one silently runs on the snapshot.
 
 ## Conventions to preserve
 

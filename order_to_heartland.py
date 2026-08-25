@@ -19,7 +19,7 @@ Accepts BOTH JOOR export formats, auto-detected:
 
 Store conventions encoded below; edit CONFIG to change.
 """
-import argparse, csv, math, os, re, sys, unicodedata
+import argparse, csv, math, os, re, sys, time, unicodedata
 import requests
 from decimal import Decimal, ROUND_CEILING
 from pathlib import Path
@@ -558,9 +558,9 @@ def _vendor_key(s: str) -> str:
     s = re.sub(r"[.\',/]", " ", s)
     return re.sub(r"[^A-Z0-9]+", " ", s).strip()
 
+# Populated below, once VENDOR_ID_MAP is available, and again from the live
+# vendor list at the start of every run (see _rebuild_vendor_lookups).
 _VENDOR_LOOKUP = {}
-for _name in KNOWN_VENDOR_NAMES:
-    _VENDOR_LOOKUP.setdefault(_vendor_key(_name), _name)
 
 def normalize_vendor(raw: str) -> str:
     """Resolve raw JOOR vendor text to the EXACT existing Heartland vendor
@@ -608,14 +608,101 @@ except ImportError:
           "generated, never checked against existing ones).")
 
 _VENDOR_ID_LOOKUP = {}
-for _vname, _vid in VENDOR_ID_MAP.items():
-    _VENDOR_ID_LOOKUP.setdefault(_vendor_key(_vname), _vid)
+
+def _rebuild_vendor_lookups(name_to_id):
+    """Point both vendor lookups at one name->id mapping. _VENDOR_LOOKUP
+    resolves the exact Heartland spelling for the import file; _VENDOR_ID_LOOKUP
+    resolves the internal id for API calls. Building them from the same source
+    is what keeps them from drifting apart."""
+    _VENDOR_LOOKUP.clear()
+    _VENDOR_ID_LOOKUP.clear()
+    for name, vid in name_to_id.items():
+        key = _vendor_key(name)
+        _VENDOR_LOOKUP.setdefault(key, name)
+        _VENDOR_ID_LOOKUP.setdefault(key, vid)
+
+# Offline baseline: the committed snapshot, plus any name in KNOWN_VENDOR_NAMES
+# that predates it. Replaced wholesale by the live list on every run (see
+# refresh_vendor_lists) -- this is only what we fall back to when Heartland is
+# unreachable, so it is never written to and is allowed to age.
+_rebuild_vendor_lookups(VENDOR_ID_MAP)
+for _name in KNOWN_VENDOR_NAMES:
+    _VENDOR_LOOKUP.setdefault(_vendor_key(_name), _name)
 
 def resolve_vendor_id(normalized_vendor_name: str):
     """Map an already-normalize_vendor()'d name to its Heartland internal
-    vendor id via vendor_id_map.py. Returns None if unmapped (e.g. a vendor
-    added in Heartland since vendor_id_map.py was last regenerated)."""
+    vendor id. Returns None if unmapped (e.g. a vendor added in Heartland
+    since the last refresh, when the refresh couldn't reach the API)."""
     return _VENDOR_ID_LOOKUP.get(_vendor_key(normalized_vendor_name))
+
+def _heartland_fetch_vendors():
+    """Every vendor in Heartland -> {name: id}, or None if the fetch failed.
+    None means 'keep using the snapshot', never 'there are no vendors'."""
+    if not (HEARTLAND_TOKEN and HEARTLAND_BASE_URL):
+        return None
+    out, page = {}, 1
+    while True:
+        try:
+            resp = requests.get(f"{HEARTLAND_BASE_URL}/purchasing/vendors",
+                                headers=HEARTLAND_HEADERS,
+                                params={"per_page": 100, "page": page}, timeout=15)
+        except requests.RequestException:
+            return None
+        if resp.status_code != 200:
+            return None
+        data = resp.json()
+        for v in data.get("results", []):
+            name, vid = (v.get("name") or "").strip(), v.get("id")
+            if name and vid is not None:
+                out[name] = vid
+        if page >= data.get("pages", 1):
+            break
+        page += 1
+    return out or None
+
+VENDOR_REFRESH_SECONDS = 24 * 60 * 60    # once a day is plenty; vendors are
+                                         # added weekly, not hourly
+_VENDORS_REFRESHED_AT = 0.0
+
+def refresh_vendor_lists(force=False):
+    """Pull the current vendor list from Heartland, at most once a day.
+
+    New vendors are added in Heartland every week or so, and a stale list is
+    expensive in both directions: an unknown name falls through to a guessed
+    spelling, which creates a DUPLICATE vendor record on import, and an
+    unmapped id silently disables the dedupe check. Refreshing live costs one
+    paginated fetch (~3s for ~450 vendors) against a run that already spends
+    ten seconds on per-grid dedupe calls.
+
+    Held in memory only -- vendor_id_map.py is deliberately never rewritten, so
+    every machine running this converter reads the live list straight from the
+    API and no clone ever has to modify (or commit) the file. That also keeps
+    the shop machine git-clean, so Pull_Updates.command can't hit a merge
+    conflict. On any failure the committed snapshot stands.
+
+    The interval matters because converter_app.py is a long-running server: a
+    once-per-process flag would refresh at first use and then go stale for as
+    long as the window stays open, which is days.
+    """
+    global _VENDORS_REFRESHED_AT
+    if not force and (time.time() - _VENDORS_REFRESHED_AT) < VENDOR_REFRESH_SECONDS:
+        return
+    live = _heartland_fetch_vendors()
+    if not live:
+        # Deliberately do NOT stamp the clock here: a dropped wifi connection
+        # on the first run of the day would otherwise pin the stale list for a
+        # full 24h even after the network came back. Retry on the next run.
+        print("  NOTE: couldn't refresh the vendor list from Heartland (offline, or "
+              "the token in .env is bad). Using the bundled list, which may be "
+              "missing vendors added recently -- watch for 'vendor not found' warnings.")
+        return
+    _VENDORS_REFRESHED_AT = time.time()
+    added = sorted(set(live) - set(VENDOR_ID_MAP))
+    _rebuild_vendor_lookups(live)
+    print(f"  refreshed vendor list from Heartland ({len(live)} vendors)")
+    if added:
+        print(f"  NOTE: {len(added)} vendor(s) new since the bundled list was built: "
+              f"{', '.join(added[:8])}{' ...' if len(added) > 8 else ''}")
 
 def _grid_query(vendor_id, style_number, color):
     """One dedupe request. True/False, or None if it couldn't be performed."""
@@ -1245,6 +1332,7 @@ def write_xlsx(path, headers, rows, text_cols=(), dropdowns=None):
 
 # ------------------------- phase 1: grids ------------------------------------
 def build_grids(joor_rows, out_path):
+    refresh_vendor_lists()     # new vendors appear weekly; a stale name duplicates
     groups = {}                                   # (vendor, style#, color) -> data
     for r in joor_rows:
         vendor = normalize_vendor(r["seller_account"])
@@ -1371,6 +1459,7 @@ def _iget(it, *keys):
     return ""
 
 def build_po(joor_rows, out_path):
+    refresh_vendor_lists()     # same reason as build_grids
     clear_item_index_cache()   # items may have been generated since the last run
     out_rows, missing = [], []
     for r in joor_rows:
