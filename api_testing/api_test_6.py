@@ -46,8 +46,10 @@ for v in all_vendors:
         print(f"  name={v['name']!r}  id={v['id']}  public_id={v['public_id']!r}")
 
 # Write the full name -> id dict to a local file (not printed in full to keep
-# terminal output manageable)
-out_path = Path(__file__).resolve().parent / "vendor_id_map.py"
+# terminal output manageable). It goes to the REPO ROOT, next to
+# order_to_heartland.py, because that's where the converter imports it from --
+# writing it here instead left the converter running without it.
+out_path = Path(__file__).resolve().parent.parent / "vendor_id_map.py"
 with open(out_path, "w") as f:
     f.write("# Auto-generated from Heartland /api/purchasing/vendors\n")
     f.write("VENDOR_ID_MAP = {\n")

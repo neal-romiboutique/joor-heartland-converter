@@ -1054,7 +1054,7 @@ def strip_style_number_prefix(style_name: str, style_number: str) -> str:
     return m.group(1).strip() if m else name
     
 def parse_order_to_size(path):
-    """JOOR 'Order to Size' wide xlsx -> (normalized long rows, images dict)."""
+    """JOOR 'Order to Size' wide xlsx -> normalized long rows."""
     _, rows = _load_sheet_rows(path)
 
     # --- header row of the line-item table
@@ -1130,8 +1130,10 @@ def parse_order_to_size(path):
     return long_rows
 
 def read_joor(path):
-    """Read a JOOR export in either format -> (list of long dicts, images dict).
-    Auto-detects: Basic Export (long) vs Order-to-Size (wide, formatted xlsx)."""
+    """Read a JOOR export in either format -> list of long row dicts.
+    Auto-detects: Basic Export (long) vs Order-to-Size (wide, formatted xlsx).
+    Both branches return the SAME shape (a plain list) -- they used to differ,
+    which crashed whichever caller assumed the other."""
     p = Path(path)
     if p.suffix.lower() in (".xlsx", ".xlsm"):
         _, rows = _load_sheet_rows(p)
@@ -1154,7 +1156,7 @@ def read_joor(path):
         rows = list(csv.reader(text.splitlines(), delimiter=delim))
     hdr = [h.strip().lower() for h in rows[0]]
     long_rows = [dict(zip(hdr, r)) for r in rows[1:] if any(str(c).strip() for c in r)]
-    return expand_size_ranges(long_rows), {}
+    return expand_size_ranges(long_rows)
 
 def write_xlsx(path, headers, rows, text_cols=(), dropdowns=None):
     from openpyxl import Workbook
@@ -1364,7 +1366,7 @@ def main():
     p = sub.add_parser("po"); p.add_argument("joor_file")
     p.add_argument("-o", default="po_import.xlsx")
     a = ap.parse_args()
-    rows, images = read_joor(a.joor_file)
+    rows = read_joor(a.joor_file)
     print(f"read {len(rows)} JOOR line(s) from {a.joor_file}")
     if a.cmd == "grids":
         build_grids(rows, a.o)

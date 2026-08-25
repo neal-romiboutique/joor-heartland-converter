@@ -218,6 +218,7 @@ __marimo__/
 .streamlit/secrets.toml
 
 # Personal
-vendor_id_map.py
+# vendor_id_map.py is intentionally tracked: order_to_heartland.py needs it at
+# the repo root or live dedupe and PO item lookup are silently skipped.
 *.xlsx
 .DS_Store
