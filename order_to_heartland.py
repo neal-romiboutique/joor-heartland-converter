@@ -902,6 +902,57 @@ def looks_like_ring(style_name) -> bool:
     oddly-named ring (it falls back to today's behavior) over claiming one."""
     return bool(_RING_NAME_RE.search(str(style_name or "")))
 
+def consolidate_size_suffixes(rows):
+    """Some vendors give every size its own style number (Jenny Bird's Renzo
+    Ring is 'JB4014-6-HPG-W' in a 6 and 'JB4014-7-HPG-W' in a 7). Left alone
+    those become one grid per size, which duplicates a grid Heartland may
+    already hold in consolidated form. Strip the size segment so the sizes
+    collapse into a single grid keyed on the base style ('JB4014-HPG-W').
+
+    Two guards, both derived from what the live catalog actually contains:
+
+    'OS' is never stripped. A one-size item has no siblings to merge with, and
+    trailing '-OS' is common enough (Staud) that stripping it would rewrite a
+    style number that already matches items in Heartland and break the PO
+    lookup -- it was 7 of the 9 false positives in a 5,500-item sample.
+
+    A family is only consolidated when 2+ distinct sizes share the same base
+    and color. A lone '-S-' or '-6' segment is far more likely to be part of
+    the vendor's own numbering than a size axis, and rewriting it would
+    orphan the item for no gain. Every non-Jenny-Bird match in that sample
+    was a single-size family.
+    """
+    fams, marks = {}, {}
+    for i, r in enumerate(rows):
+        sn = str(r["style_number"]).strip()
+        size = canonical_size_token(r["size"])
+        if size == "OS" or not sn:
+            continue
+        parts = sn.split("-")
+        if len(parts) < 2 or size not in parts:
+            continue
+        base = "-".join(p for p in parts if p != size)
+        if not base:
+            continue                      # style was nothing but the size
+        key = (str(r["seller_account"]).strip(), base, normalize_color(r["color"]))
+        fams.setdefault(key, set()).add(size)
+        marks[i] = (key, base, sn)
+
+    out, renamed = [], {}
+    for i, r in enumerate(rows):
+        if i in marks:
+            key, base, sn = marks[i]
+            if len(fams[key]) > 1:        # a real size axis, not a one-off segment
+                nr = dict(r); nr["style_number"] = base
+                renamed.setdefault(sn, base)
+                out.append(nr)
+                continue
+        out.append(r)
+    for old, new in sorted(renamed.items()):
+        print(f"  NOTE: '{old}' carries its size in the style number; consolidating "
+              f"into '{new}' so every size lands in one grid.")
+    return out
+
 def _size_encoded_in_style_number(style_number, sizes) -> bool:
     """True when the vendor puts the ring size in the style number itself, so
     each size is its own style (Jenny Bird: 'JB4014-6-HPG-W' is the size 6,
@@ -1333,6 +1384,7 @@ def write_xlsx(path, headers, rows, text_cols=(), dropdowns=None):
 # ------------------------- phase 1: grids ------------------------------------
 def build_grids(joor_rows, out_path):
     refresh_vendor_lists()     # new vendors appear weekly; a stale name duplicates
+    joor_rows = consolidate_size_suffixes(joor_rows)
     groups = {}                                   # (vendor, style#, color) -> data
     for r in joor_rows:
         vendor = normalize_vendor(r["seller_account"])
@@ -1460,6 +1512,10 @@ def _iget(it, *keys):
 
 def build_po(joor_rows, out_path):
     refresh_vendor_lists()     # same reason as build_grids
+    # Must run here too: the items build_grids created are keyed on the
+    # consolidated style number, so looking them up under the original
+    # per-size number would miss every consolidated line.
+    joor_rows = consolidate_size_suffixes(joor_rows)
     clear_item_index_cache()   # items may have been generated since the last run
     out_rows, missing = [], []
     for r in joor_rows:
