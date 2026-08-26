@@ -74,12 +74,21 @@ Credentials come from `.env` next to the script (`HEARTLAND_SUBDOMAIN`, `HEARTLA
 Two endpoint quirks are easy to get wrong:
 
 - `/api/items` filters custom fields with the plain `~[custom@<field>]` prefix, and the vendor with `~[primary_vendor_id]`. *(Confirmed against Heartland's published docs.)*
-- `/api/item_grids` filters with `~[item_custom@<field>]` and `~[item_primary_vendor_id]` — note the extra `item_` prefix on both. *(Established empirically by `api_testing/api_test_5.py` after `custom@` returned HTTP 400; not stated in the public docs.)*
+- `/api/item_grids` filters with `~[item_custom@<field>]` and `~[item_primary_vendor_id]` — note the extra `item_` prefix on both. *(Established empirically by `api_testing/api_test_5.py` after `custom@` returned HTTP 400; not stated in the public docs.)* **Nothing in the converter filters grids by color any more — see "Dedupe asks about items, not grids" below.**
+- Custom-field filters are **case-sensitive exact matches**. `~[custom@color]=BLACK` returns 4 items where `Black` returns 0, and stored casing is inconsistent within a single style (`CJ3548` carries both `BLACK` and `Charcoal`). Never rely on a server-side color filter; match client-side on an uppercased key.
 - `ITEM_NUMBER_FIELD = "id"`, not `public_id`. Vendors proved these differ; the constant exists as a single switch if `api_test_8.py` ever shows otherwise.
 
 The `api_testing/api_test_*.py` scripts are the record of how these were determined — each one's docstring states the question it answered. They are read-only probes, safe to re-run.
 
 `build_po` fetches one paginated index of all of a vendor's items rather than one request per order line, and clears `_ITEM_INDEX_CACHE` at the start of each run because the grids import likely just created new items. API failures return `None` and are treated as "include the grid / stop the PO" — never as "silently drop the line".
+
+### Dedupe asks about items, not grids
+
+`heartland_grid_exists` reads `heartland_vendor_item_index` (the same per-vendor index `build_po` uses) and asks whether any item exists for that `(STYLE, COLOR)`. It does **not** query `/api/item_grids`, because a grid's own `item_custom.color` is blank by design: `build_grids` writes the color to `Dimension 1 Values`, since a grid spans *all* colors of a style and has no single one. The original implementation filtered grids on that always-blank field, so it returned `False` for every grid this converter creates and dedupe never once fired. Measured before the fix: 0 of the 25 most recently imported grids had a grid-level color, and 6 of 411 sampled grids created since 2025.
+
+Do not "simplify" this back to a style-only grid query. Four separate `RCK8232` grids were imported on 2026-08-25, one per color, all with blank grid-level color — matching on style alone would skip three real colors, and a missing item is far worse than a duplicate grid. Matching through the item index also makes the comparison case-insensitive for free (both sides are uppercased), which a server-side filter cannot be.
+
+`build_grids` calls `clear_item_index_cache()` at the start of each run for the same reason `build_po` does: `converter_app.py` is a long-running server, so an index cached before the user's Heartland import would miss the items it just created.
 
 ### The vendor list refreshes itself
 

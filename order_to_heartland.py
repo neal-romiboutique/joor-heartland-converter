@@ -704,49 +704,68 @@ def refresh_vendor_lists(force=False):
         print(f"  NOTE: {len(added)} vendor(s) new since the bundled list was built: "
               f"{', '.join(added[:8])}{' ...' if len(added) > 8 else ''}")
 
-def _grid_query(vendor_id, style_number, color):
-    """One dedupe request. True/False, or None if it couldn't be performed."""
-    try:
-        resp = requests.get(
-            f"{HEARTLAND_BASE_URL}/item_grids",
-            headers=HEARTLAND_HEADERS,
-            params={
-                "~[item_primary_vendor_id]": vendor_id,
-                "~[item_custom@style_number]": style_number,
-                "~[item_custom@color]": color,
-                "per_page": 1,
-            },
-            timeout=10,
-        )
-        if resp.status_code != 200:
-            print(f"  WARNING: Heartland dedupe check failed (HTTP {resp.status_code}) "
-                  f"for '{style_number}' / '{color}'; including grid as a precaution "
-                  f"-- verify manually before importing.")
-            return None
-        return resp.json().get("total", 0) > 0
-    except requests.RequestException as e:
-        print(f"  WARNING: Heartland dedupe check errored ({e}) for "
+# Dedupe deliberately asks /api/items, NOT /api/item_grids, even though the
+# question is "does this grid exist". Two measured reasons:
+#
+#   1. The grid-level 'item_custom@color' field is blank on virtually every
+#      grid this converter creates -- 0 of the 25 most recently imported
+#      grids carry one, and only 6 of 411 sampled grids created since 2025.
+#      A query filtering on a real color name therefore never matched, so
+#      dedupe silently returned False for everything and every run re-emitted
+#      grids that already existed.
+#   2. Heartland's custom-field filters are case-sensitive exact matches
+#      ('BLACK' hits, 'Black' returns 0), and the stored casing is
+#      inconsistent even within one style (CJ3548 has both 'BLACK' and
+#      'Charcoal'). Filtering on color server-side can't be made reliable.
+#
+# Items do carry color, and heartland_vendor_item_index() already uppercases
+# style and color on both sides, so matching there is case-insensitive by
+# construction. Dropping the color from a grid query instead was rejected:
+# four separate RCK8232 grids were imported on 2026-08-25, one per color, all
+# with blank grid-level color -- a style-only match would have skipped three
+# real colors, and a missing item is worse than a duplicate grid.
+_STYLE_COLOR_CACHE = {}
+
+def _vendor_style_colors(vendor_id):
+    """{(STYLE, COLOR)} uppercased, for every item Heartland has for this
+    vendor, derived from the same index build_po uses. None if the fetch
+    failed, so callers can tell 'no match' apart from 'couldn't check'."""
+    if vendor_id in _STYLE_COLOR_CACHE:
+        return _STYLE_COLOR_CACHE[vendor_id]
+    index = heartland_vendor_item_index(vendor_id)
+    if index is None:
+        return None
+    pairs = {(style, color) for (style, color, _size) in index}
+    _STYLE_COLOR_CACHE[vendor_id] = pairs
+    return pairs
+
+def heartland_grid_exists(vendor_id, style_number, color):
+    """Live-check whether Heartland already has items for this vendor + style
+    number + color, which is the observable proof that the grid was imported
+    and generated. Multi-color names are checked in both the current
+    ampersand form and the legacy slash form, so a grid created before the
+    ampersand change still counts as existing. Returns True/False, or None if
+    the check couldn't be performed (missing credentials, network error,
+    unmapped vendor) -- callers should treat None as 'include the grid'
+    rather than silently dropping a potentially-new item.
+
+    A grid imported with Generate Items = false (unknown size convention) has
+    no items, so it reads as absent and the grid is re-emitted. That is the
+    safe direction: a visible duplicate the reviewer can delete, rather than
+    a silently missing one."""
+    if not (HEARTLAND_TOKEN and HEARTLAND_BASE_URL and vendor_id):
+        return None
+    pairs = _vendor_style_colors(vendor_id)
+    if pairs is None:
+        print(f"  WARNING: Heartland dedupe check couldn't be performed for "
               f"'{style_number}' / '{color}'; including grid as a precaution "
               f"-- verify manually before importing.")
         return None
-
-def heartland_grid_exists(vendor_id, style_number, color):
-    """Live-check whether an item grid already exists in Heartland for this
-    vendor + style number + color. Multi-color names are checked in both the
-    current ampersand form and the legacy slash form, so a grid created
-    before the ampersand change still counts as existing. Returns True/False,
-    or None if the check couldn't be performed (missing credentials, network
-    error, unmapped vendor) -- callers should treat None as 'include the
-    grid' rather than silently dropping a potentially-new item."""
-    if not (HEARTLAND_TOKEN and HEARTLAND_BASE_URL and vendor_id):
-        return None
+    style_key = str(style_number).strip().upper()
     for c in _color_variants(color):
-        hit = _grid_query(vendor_id, style_number, c)
-        if hit is None:
-            return None
-        if hit:
+        if (style_key, c.strip().upper()) in pairs:
             if c != color:
-                print(f"  NOTE: '{style_number}' matched an existing Heartland grid "
+                print(f"  NOTE: '{style_number}' matched existing Heartland items "
                       f"under the legacy color '{c}' (not '{color}').")
             return True
     return False
@@ -777,8 +796,12 @@ def clear_item_index_cache():
     the start of each build_po run: within a run the cache saves one request
     per JOOR line, but between runs new items may have been generated in
     Heartland (e.g. by the grids import that just happened), and a stale index
-    would silently push those lines into the 'missing' warning."""
+    would silently push those lines into the 'missing' warning. The same
+    applies to build_grids' dedupe, which reads the same index: converter_app
+    is a long-running server, so a cache left over from an earlier run would
+    miss the items the user has imported since and re-emit those grids."""
     _ITEM_INDEX_CACHE.clear()
+    _STYLE_COLOR_CACHE.clear()
 
 def heartland_vendor_item_index(vendor_id, refresh=False):
     """One paginated fetch of every item for a vendor ->
@@ -1384,6 +1407,7 @@ def write_xlsx(path, headers, rows, text_cols=(), dropdowns=None):
 # ------------------------- phase 1: grids ------------------------------------
 def build_grids(joor_rows, out_path):
     refresh_vendor_lists()     # new vendors appear weekly; a stale name duplicates
+    clear_item_index_cache()   # dedupe reads it; the user may have imported since
     joor_rows = consolidate_size_suffixes(joor_rows)
     groups = {}                                   # (vendor, style#, color) -> data
     for r in joor_rows:
