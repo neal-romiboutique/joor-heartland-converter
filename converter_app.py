@@ -75,7 +75,7 @@ name in the file, so type it below &mdash; it must match the vendor name in Hear
 You&rsquo;ll get the <b>grid import file</b> only; build the PO in Heartland by selecting
 the grids once they&rsquo;re imported.</p>
 <div class="field" id="field-vendor">
-  <label for="vendor">Vendor (exact Heartland name)</label>
+  <label for="vendor" id="label-vendor">Vendor (exact Heartland name)</label>
   <input type="text" id="vendor" placeholder="e.g. Mother" oninput="refresh()">
 </div>
 <div class="drop" id="drop-joor">Drag the <b>JOOR export</b> here<br>(or click to browse)</div>
@@ -93,7 +93,13 @@ function setPhase(p) {
     document.getElementById('tab-'+t).classList.toggle('active', p===t);
     document.getElementById('hint-'+t).style.display = p===t ? '' : 'none';
   }
-  document.getElementById('field-vendor').style.display = p==='nuorder' ? 'block' : 'none';
+  // Shown on the grids tab as an OPTIONAL override, for when JOOR's spelling
+  // of the brand doesn't resolve to a Heartland vendor ("Mother Denim").
+  // Required only for NuOrder, whose export carries no vendor at all.
+  document.getElementById('field-vendor').style.display = p==='po' ? 'none' : 'block';
+  document.getElementById('label-vendor').textContent = p==='nuorder'
+    ? 'Vendor (exact Heartland name)'
+    : 'Vendor override (optional \u2014 leave blank unless the brand name fails to match)';
   const d = document.getElementById('drop-joor');
   if (!joorFile) d.innerHTML = 'Drag the <b>' + (p==='nuorder' ? 'NuOrder' : 'JOOR') +
                                ' export</b> here<br>(or click to browse)';
@@ -172,7 +178,11 @@ def run_conversion(payload):
                     build_po(rows, out)
                 else:
                     out = tdir / f"{stem}_GRIDS_IMPORT.xlsx"
-                    build_grids(rows, out)
+                    # NuOrder REQUIRES the vendor (read_nuorder already used it
+                    # above, so passing it on is a no-op); JOOR treats it as an
+                    # optional override. Still a pure pass-through either way --
+                    # no conversion logic lives in this file.
+                    build_grids(rows, out, vendor_override=payload.get("vendor", ""))
                 out_files.append(out)
         except SystemExit as e:                    # converter's sys.exit(...) messages
             print(e, file=log)

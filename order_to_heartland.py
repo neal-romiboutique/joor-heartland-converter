@@ -26,8 +26,9 @@ from pathlib import Path
 
 # ----------------------------- CONFIG ---------------------------------------
 MARGIN = Decimal("2.4")          # retail = MARGIN x unit cost when JOOR has no MSRP
-VENDOR_MAP = {                   # raw JOOR seller_account -> Heartland vendor record
-    # "Some JOOR Name": "Exact Heartland Vendor Name",  # explicit overrides go here
+VENDOR_MAP = {                   # JOOR seller_account -> exact Heartland vendor name
+    # Matched through _vendor_key, so casing/accents/punctuation don't matter.
+    "Mother Denim": "Mother",    # JOOR trades as Mother Denim; Heartland has "Mother"
 }
 # Known Heartland vendors (Purchasing -> Vendors export), used to resolve the
 # exact existing vendor Name instead of guessing one. Re-export and regenerate
@@ -526,21 +527,34 @@ def fix_mojibake(s: str) -> str:
 _W_SLASH_RE = re.compile(r"(?i)\bW/")
 
 def normalize_color(raw: str) -> str:
-    """Title-case a color and render multi-color names with ampersands
-    ('BLUE/BLACK/GREEN' -> 'Blue & Black & Green'). 'W/' is shorthand for
-    'with', not a color divider, so it's protected."""
+    """Title-case a color and join multi-color names with a bare slash
+    ('BLUE/BLACK/GREEN' -> 'Blue/Black/Green'). 'W/' is shorthand for 'with',
+    not a color divider, so it's protected.
+
+    The slash is the store's standard: of the 17,573 grids in Heartland,
+    1,358 carry a '/' in the color and only 40 carry an '&' -- and most of
+    those 40 are genuine vendor color NAMES ('Sweet & Sassy', 'Diamonds &
+    Rose Gold'), not separators. Between 2026-08-21 and 2026-09-15 this
+    function wrote ' & ' instead; grids from that window are matched by
+    _color_match_key, not by rewriting them."""
     s = title_caps(fix_mojibake(raw))
     s = _W_SLASH_RE.sub("\x00", s)          # shield W/ from the split
-    s = re.sub(r"\s*/\s*", " & ", s)
+    s = re.sub(r"\s*/\s*", "/", s)
     return s.replace("\x00", "W/")
 
-def _color_variants(color: str):
-    """The normalized color plus, for multi-color names, its pre-ampersand
-    slash form ('Blue & Black' -> 'Blue/Black'). Grids and items created
-    before normalize_color() existed are stored with slashes, so dedupe and
-    item lookup have to try both. Single-color names yield one variant."""
-    legacy = re.sub(r"\s*&\s*", "/", color)
-    return [color] if legacy == color else [color, legacy]
+def _color_match_key(color: str) -> str:
+    """Canonical form for COMPARING two colors -- never for writing one.
+
+    Heartland holds the same physical color under every separator style,
+    because each was the house convention at some point and some grids were
+    typed by hand: 'BLACK/CREAM', 'BLACK / CREAM', 'Black & Cream' and
+    'Black/Cream' all coexist in the live catalog (Generation Love H22369 has
+    two grids differing only by the spaces around the slash). Enumerating
+    variants missed the spaced form; collapsing the separator on BOTH sides of
+    the comparison catches all of them at once. A real ampersand inside a
+    color name ('Sweet & Sassy') canonicalizes the same way on both sides, so
+    it still only ever matches itself."""
+    return re.sub(r"\s*[&/]\s*", "/", str(color).strip().upper())
     
 def clean_size(raw) -> str:
     """Strip a leading 'SIZE' label some vendors include in JOOR (e.g.
@@ -562,23 +576,60 @@ def _vendor_key(s: str) -> str:
 # vendor list at the start of every run (see _rebuild_vendor_lookups).
 _VENDOR_LOOKUP = {}
 
+# VENDOR_MAP is keyed through _vendor_key so an override fires whatever casing
+# or punctuation JOOR happens to send ("MOTHER DENIM", "Mother Denim.").
+_VENDOR_MAP_BY_KEY = {_vendor_key(k): v for k, v in VENDOR_MAP.items()}
+
+def _vendor_near_matches(key):
+    """Known Heartland vendors that differ from `key` only by trailing whole
+    words: JOOR's "Mother Denim" -> Heartland's "Mother". WHOLE tokens only,
+    so 'CAMI' can never match 'CAMILLA'.
+
+    Deliberately returns every candidate instead of picking one. The live list
+    contains real, distinct vendors that differ by exactly one trailing word --
+    Cami / Cami NYC, Milly / Milly Cabana, Jakett / Jakett New York, Frank And
+    Eileen / Frank And Eileen Tee Lab -- so guessing between them would create
+    orders against the wrong vendor. The exact-key lookup runs first, so a name
+    that IS one of those pairs resolves on its own and never reaches here."""
+    toks = key.split()
+    if not toks:
+        return []
+    out = []
+    for k, name in _VENDOR_LOOKUP.items():
+        kt = k.split()
+        if kt != toks and (kt[:len(toks)] == toks or toks[:len(kt)] == kt):
+            out.append(name)
+    return sorted(out)
+
 def normalize_vendor(raw: str) -> str:
     """Resolve raw JOOR vendor text to the EXACT existing Heartland vendor
     Name (matches how Heartland's import screen looks up vendors) rather than
     guessing a new string, which risks creating a duplicate vendor record."""
     raw = fix_mojibake(raw)
-    if raw in VENDOR_MAP:
-        return VENDOR_MAP[raw]
     name = raw.split(" (")[0]                                   # drop "(shopdoen.com)"
-    hit = _VENDOR_LOOKUP.get(_vendor_key(name))
+    key = _vendor_key(name)
+    if key in _VENDOR_MAP_BY_KEY:
+        return _VENDOR_MAP_BY_KEY[key]
+    hit = _VENDOR_LOOKUP.get(key)
     if hit:
         return hit
+    near = _vendor_near_matches(key)
+    if len(near) == 1:
+        print(f"  NOTE: JOOR vendor '{name}' matched Heartland vendor "
+              f"'{near[0]}' (differs only by a trailing word).")
+        return near[0]
     guess = unicodedata.normalize("NFKD", name)
     guess = "".join(c for c in guess if not unicodedata.combining(c)).upper().strip()
-    print(f"  WARNING: vendor '{name}' not found in the known Heartland vendor "
-          f"list; using '{guess}' as a guess. Check Purchasing -> Vendors before "
-          f"importing, or add an override to VENDOR_MAP, to avoid creating a "
-          f"duplicate vendor record.")
+    if near:
+        print(f"  WARNING: vendor '{name}' is ambiguous -- it could be any of: "
+              f"{', '.join(near)}. Using '{guess}' as a guess. Type the exact "
+              f"Heartland name in the Vendor override box, or add it to "
+              f"VENDOR_MAP, before importing.")
+    else:
+        print(f"  WARNING: vendor '{name}' not found in the known Heartland vendor "
+              f"list; using '{guess}' as a guess. Check Purchasing -> Vendors before "
+              f"importing, or add an override to VENDOR_MAP, to avoid creating a "
+              f"duplicate vendor record.")
     return guess
     
 # ------------------------- Heartland API (live dedupe check) ----------------
@@ -727,48 +778,61 @@ def refresh_vendor_lists(force=False):
 _STYLE_COLOR_CACHE = {}
 
 def _vendor_style_colors(vendor_id):
-    """{(STYLE, COLOR)} uppercased, for every item Heartland has for this
-    vendor, derived from the same index build_po uses. None if the fetch
-    failed, so callers can tell 'no match' apart from 'couldn't check'."""
+    """{STYLE: {COLOR_KEY, ...}} for every item Heartland has for this vendor,
+    derived from the same index build_po uses. Colors go through
+    _color_match_key so separator style and casing don't matter. Keyed by
+    style rather than flat (style, color) pairs so build_grids can answer both
+    'does this exact grid exist' and 'does this style already exist in some
+    OTHER colour spelling' without a second pass. None if the fetch failed, so
+    callers can tell 'no match' apart from 'couldn't check'."""
     if vendor_id in _STYLE_COLOR_CACHE:
         return _STYLE_COLOR_CACHE[vendor_id]
     index = heartland_vendor_item_index(vendor_id)
     if index is None:
         return None
-    pairs = {(style, color) for (style, color, _size) in index}
-    _STYLE_COLOR_CACHE[vendor_id] = pairs
-    return pairs
+    by_style = {}
+    for (style, color, _size) in index:
+        by_style.setdefault(style, set()).add(color)
+    _STYLE_COLOR_CACHE[vendor_id] = by_style
+    return by_style
 
-def heartland_grid_exists(vendor_id, style_number, color):
-    """Live-check whether Heartland already has items for this vendor + style
-    number + color, which is the observable proof that the grid was imported
-    and generated. Multi-color names are checked in both the current
-    ampersand form and the legacy slash form, so a grid created before the
-    ampersand change still counts as existing. Returns True/False, or None if
-    the check couldn't be performed (missing credentials, network error,
-    unmapped vendor) -- callers should treat None as 'include the grid'
-    rather than silently dropping a potentially-new item.
+def dedupe_index_for_vendor(vendor, vendor_id):
+    """The style->colors map used to skip grids Heartland already has, and a
+    printed one-line statement of whether that check is actually live.
 
-    A grid imported with Generate Items = false (unknown size convention) has
-    no items, so it reads as absent and the grid is re-emitted. That is the
-    safe direction: a visible duplicate the reviewer can delete, rather than
-    a silently missing one."""
-    if not (HEARTLAND_TOKEN and HEARTLAND_BASE_URL and vendor_id):
+    The status line is the point. build_grids treats "couldn't check" as
+    "emit the grid" (a visible duplicate the reviewer can delete beats a
+    silently missing item), but two of the three ways to get there used to
+    print nothing at all -- a vendor name Heartland doesn't recognise, and a
+    missing .env -- so a run with the check entirely disabled was
+    indistinguishable in the log from a run where every grid was genuinely
+    new. That is how duplicate grids reached Heartland unnoticed.
+
+    Note a grid imported with Generate Items = false (unknown size
+    convention) has no items, so it reads as absent here and is re-emitted
+    every run until its items exist. Also deliberate, same reasoning."""
+    if not (HEARTLAND_TOKEN and HEARTLAND_BASE_URL):
+        print(f"  WARNING: duplicate check OFF for '{vendor}' -- no Heartland "
+              f"credentials found in .env. Every grid for this vendor is "
+              f"emitted unchecked; look for duplicates before importing.")
         return None
-    pairs = _vendor_style_colors(vendor_id)
-    if pairs is None:
-        print(f"  WARNING: Heartland dedupe check couldn't be performed for "
-              f"'{style_number}' / '{color}'; including grid as a precaution "
-              f"-- verify manually before importing.")
+    if not vendor_id:
+        print(f"  WARNING: duplicate check OFF for '{vendor}' -- that is not a "
+              f"known Heartland vendor, so its existing items can't be looked "
+              f"up. Every grid for this vendor is emitted unchecked. Fix the "
+              f"vendor name (Vendor override box, or VENDOR_MAP) and re-run to "
+              f"check properly.")
         return None
-    style_key = str(style_number).strip().upper()
-    for c in _color_variants(color):
-        if (style_key, c.strip().upper()) in pairs:
-            if c != color:
-                print(f"  NOTE: '{style_number}' matched existing Heartland items "
-                      f"under the legacy color '{c}' (not '{color}').")
-            return True
-    return False
+    by_style = _vendor_style_colors(vendor_id)
+    if by_style is None:
+        print(f"  WARNING: duplicate check OFF for '{vendor}' -- couldn't reach "
+              f"Heartland to list its items. Every grid for this vendor is "
+              f"emitted unchecked; verify manually before importing.")
+        return None
+    combos = sum(len(v) for v in by_style.values())
+    print(f"  duplicate check ON for '{vendor}' -- {len(by_style)} style(s) / "
+          f"{combos} style-colour combination(s) already in Heartland")
+    return by_style
 
 # Which /api/items field carries the "Item #" Heartland's PO import expects.
 # Vendors proved id != public_id (the UI's "#" column was public_id), so this
@@ -837,7 +901,7 @@ def heartland_vendor_item_index(vendor_id, refresh=False):
                 continue
             cust = _item_custom(it)
             style = str(cust.get("style_number") or "").strip().upper()
-            color = str(cust.get("color") or "").strip().upper()
+            color = _color_match_key(cust.get("color") or "")
             size = canonical_size_token(cust.get("size") or "").upper()
             if style and color:
                 index[(style, color, size)] = num
@@ -904,6 +968,25 @@ def _num(v):
 # ------------------------- size completion engine ---------------------------
 LETTER_LADDER = ["XXXS","XXS","XS","S","M","L","XL","XXL","XXXL","XXXXL"]
 LETTER_BASE = ("XS","L")
+
+# Petite is its own ladder, NOT an extra rung on LETTER_LADDER. 98 grids in
+# Heartland carry the set {P,S,M,L} (85 of them Ulla Johnson) and none of them
+# carry XS, so folding P into the XS-L base run would silently add a P size to
+# every ordinary letter grid the converter makes. Detection is gated on P
+# actually being ordered, so plain letter orders take the branch below as before.
+LETTER_PETITE_LADDER = ["P","S","M","L","XL","XXL","XXXL"]
+LETTER_PETITE_BASE = ("P","L")
+
+# Combined-letter sizing (TWP, A Shirt Thing): one item covers two rungs, so
+# 'XS/S' is a single size token and NOT a color-style slash pair. 51 grids in
+# Heartland use it, mostly as {P, XS/S, M/L}; without this ladder they land in
+# 'unknown' and import with Generate Items = false, i.e. an empty grid.
+# Only the rungs the store actually uses: adding a plausible-looking 'S/M' or
+# 'L/XL' between them would insert sizes into all 51 existing grids' shape,
+# and every one of those grids carries P, which is why P is the base floor.
+COMBO_LADDER = ["P","XS/S","M/L","1XL"]
+COMBO_BASE = ("P","M/L")
+
 OS_TOKENS = {"OS","O/S","ONE SIZE","ONESIZE","NA", "N/A", "N/a", "Na", "na", "n/a"}
 
 # Ring ladder: 6-8 is the store's base run, 5 and 9 only when actually ordered.
@@ -990,6 +1073,21 @@ def _size_encoded_in_style_number(style_number, sizes) -> bool:
 # 12/14/16/18+. Kept as strings throughout so '00' stays distinct from '0'.
 NUMERIC_EVEN_LADDER = ["00","0","2","4","6","8","10","12","14","16","18","20"]
 
+def _consecutive_numeric_key(tok):
+    """Sort key for a single-step numeric ladder. '00' is the rung one below
+    '0' (see NUMERIC_EVEN_LADDER's comment), which plain int() destroys."""
+    return -1 if str(tok).strip() == "00" else int(tok)
+
+def _is_consecutive_numeric_token(s):
+    """A whole non-negative number, or the distinct '00' rung."""
+    s = str(s).strip()
+    if s == "00":
+        return True
+    try:
+        return int(s) >= 0
+    except ValueError:
+        return False
+
 def _is_numeric_even_token(s):
     s = str(s).strip()
     if s == "00":
@@ -1010,6 +1108,31 @@ def _numeric_even_ladder_upto(sizes):
         ladder.append(str(last_val))
     return ladder
 
+def _size_sort_key(size):
+    """Retail order for a loose pile of size tokens, used wherever no ladder
+    applies (the 'unknown' fallback and the ring-in-style-number branch).
+    Letter ladders first in ladder order, then numbers, then anything else
+    alphabetically. A plain alphabetical sort is what turned Ulla Johnson's
+    P,S,M into 'M,P,S' in Heartland."""
+    s = str(size).strip().upper()
+    if s in LETTER_LADDER:
+        return (0, LETTER_LADDER.index(s), "")
+    if s == "P":
+        # Petite has no rung on LETTER_LADDER (every other LETTER_PETITE_LADDER
+        # token does, and is caught above). Sort it just below S so a mixed
+        # pile still reads P,S,M,L rather than alphabetically.
+        return (0, LETTER_LADDER.index("S") - 0.5, "")
+    if s in COMBO_LADDER:
+        # 'XS/S' etc: sort by the rung it starts on, so a pile that stays
+        # 'unknown' still reads P, XS/S, M/L rather than alphabetically.
+        return (0, LETTER_LADDER.index("S") - 0.5 + COMBO_LADDER.index(s) * 0.01, "")
+    if s == "00":
+        return (1, -1, "")           # '00' is the rung below '0', not zero
+    try:
+        return (1, float(s), "")
+    except ValueError:
+        return (2, 0, s)
+
 def detect_convention(sizes, is_ring=False):
     """Return (name, ladder, base_lo_idx, base_hi_idx) or fallback.
     is_ring comes from the style name (see looks_like_ring) because ring and
@@ -1017,9 +1140,22 @@ def detect_convention(sizes, is_ring=False):
     up = [s.upper() for s in sizes]
     if all(s in OS_TOKENS for s in up):
         return ("os", ["OS"], 0, 0)
+    # The '"P" in up' gate is what keeps ordinary XS-L orders on LETTER_LADDER.
+    # Without it -- i.e. if P were simply added as a rung there -- every letter
+    # grid the converter makes would grow a Petite size, since LETTER_BASE
+    # spans XS to L and completion fills the whole run.
+    if "P" in up and all(s in LETTER_PETITE_LADDER for s in up):
+        return ("letters-petite", LETTER_PETITE_LADDER,
+                LETTER_PETITE_LADDER.index(LETTER_PETITE_BASE[0]),
+                LETTER_PETITE_LADDER.index(LETTER_PETITE_BASE[1]))
     if all(s in LETTER_LADDER for s in up):
         return ("letters", LETTER_LADDER,
                 LETTER_LADDER.index(LETTER_BASE[0]), LETTER_LADDER.index(LETTER_BASE[1]))
+    # Needs a slashed token present, so a plain {P} or {P,S} order stays on the
+    # petite ladder above rather than being read as combined sizing.
+    if any("/" in s for s in up) and all(s in COMBO_LADDER for s in up):
+        return ("combo-letters", COMBO_LADDER,
+                COMBO_LADDER.index(COMBO_BASE[0]), COMBO_LADDER.index(COMBO_BASE[1]))
     # MUST precede the numeric branches: numeric-even would claim an all-even
     # ring order (6,8) and hand back a 00-20 apparel ladder.
     if is_ring and all(canonical_size_token(s) in RING_LADDER for s in sizes):
@@ -1036,17 +1172,27 @@ def detect_convention(sizes, is_ring=False):
         # ladder so complete_sizes doesn't warn "unrecognized convention".
         ladder = sorted(set(sizes))
         return ("literal-hyphenated", ladder, 0, len(ladder) - 1)
+    # Brands on a small consecutive ladder (Lisa Yang: 00,0,1,2,3) have no
+    # store-standard base run, so there is nothing to complete TO. The old
+    # numeric-0-4 branch guessed one and invented sizes: an order of 0,1,00
+    # came back from Heartland as 0,1,2,3,4 -- three sizes never ordered, and
+    # the '00' rung lost because int("00") == 0 collapsed it into '0'.
+    # Emit exactly what was ordered instead, in numeric order, '00' intact.
+    # numeric-even is checked first, so plain even runs still complete to 0-10.
+    if all(_is_consecutive_numeric_token(s) for s in sizes):
+        toks = {canonical_size_token(s) for s in sizes}
+        if max(_consecutive_numeric_key(t) for t in toks) <= 12:
+            ladder = sorted(toks, key=_consecutive_numeric_key)
+            return ("numeric-ordered", ladder, 0, len(ladder) - 1)
     try:
         nums = sorted({int(s) for s in sizes})
     except ValueError:
         return ("unknown", None, None, None)
     lo, hi = nums[0], nums[-1]
     if hi <= 12:
-        odd = any(n % 2 for n in nums)
-        if odd and hi <= 6:                       # 0,1,2,3,4 style
-            ladder = list(range(0, max(hi, 4) + 1))
-            return ("numeric-0-4", ladder, ladder.index(0), ladder.index(4))
-        return ("unknown", None, None, None)       # odd sizes above 6: unrecognized
+        # Only negative sizes reach here now; every non-negative all-numeric
+        # set was claimed by numeric-even or numeric-ordered above.
+        return ("unknown", None, None, None)
     if 20 <= lo and hi <= 45:                      # denim 24-29 base, step 1
         ladder = list(range(min(lo, 24), max(hi, 29) + 1))
         return ("denim-24-29", ladder, ladder.index(24), ladder.index(29))
@@ -1063,8 +1209,11 @@ def complete_sizes(ordered_sizes, is_ring=False):
     if name == "unknown":
         print(f"  WARNING: unrecognized size convention {sorted(set(ordered_sizes))}; "
               f"using ordered sizes as-is (no completion).")
-        return sorted(set(str(s) for s in ordered_sizes)), name
-    if name == "letters":
+        # sorted() alone is alphabetical, which is what put Ulla Johnson's
+        # P,S,M into Heartland as 'M,P,S'. _size_sort_key keeps retail order
+        # even for sets no ladder recognizes.
+        return sorted({str(s) for s in ordered_sizes}, key=_size_sort_key), name
+    if name in ("letters", "letters-petite", "combo-letters"):
         idxs = [ladder.index(s.upper()) for s in ordered_sizes]
     elif name == "numeric-even":
         idxs = [ladder.index("00" if str(s).strip() == "00" else str(int(s)))
@@ -1072,6 +1221,10 @@ def complete_sizes(ordered_sizes, is_ring=False):
     elif name == "literal-hyphenated":
         # ladder is the literal string tokens themselves ('00-14'); never int()
         idxs = [ladder.index(str(s).strip()) for s in ordered_sizes]
+    elif name == "numeric-ordered":
+        # ladder IS the ordered set, so the span below covers all of it and
+        # nothing is added -- '00' must stay a string here too.
+        idxs = [ladder.index(canonical_size_token(s)) for s in ordered_sizes]
     elif name == "ring":
         # string ladder like letters, but the tokens are digits -- go through
         # canonical_size_token so '07'/'SIZE 7' land on the same rung as '7'
@@ -1405,13 +1558,28 @@ def write_xlsx(path, headers, rows, text_cols=(), dropdowns=None):
     wb.save(path)
 
 # ------------------------- phase 1: grids ------------------------------------
-def build_grids(joor_rows, out_path):
+def build_grids(joor_rows, out_path, vendor_override=""):
+    """vendor_override forces every grid onto one exact Heartland vendor name,
+    for when JOOR's spelling can't be resolved automatically (the app's Vendor
+    override box). Empty means resolve per row, which is the normal path."""
     refresh_vendor_lists()     # new vendors appear weekly; a stale name duplicates
     clear_item_index_cache()   # dedupe reads it; the user may have imported since
     joor_rows = consolidate_size_suffixes(joor_rows)
+    override = str(vendor_override or "").strip()
+    if override:
+        # Worded to read correctly on both tabs: on the JOOR tab this is an
+        # override of the name in the file, on the NuOrder tab it is the only
+        # source of the vendor at all.
+        print(f"  NOTE: all grids assigned to vendor '{override}' "
+              f"(from the Vendor field), not to any name in the order file.")
+    resolved = {}              # raw seller_account -> Heartland name, so the
+                               # NOTE/WARNING prints once per vendor, not per row
     groups = {}                                   # (vendor, style#, color) -> data
     for r in joor_rows:
-        vendor = normalize_vendor(r["seller_account"])
+        raw_vendor = r["seller_account"]
+        if raw_vendor not in resolved:
+            resolved[raw_vendor] = override or normalize_vendor(raw_vendor)
+        vendor = resolved[raw_vendor]
         raw_color = r["color"]
         if _looks_like_color_code(raw_color):
             print(f"  NOTE: color '{raw_color}' for '{r['style_name']}' looks like a "
@@ -1435,15 +1603,37 @@ def build_grids(joor_rows, out_path):
             code = slug(color)                    # fall back to full color slug
         codes[(vendor, style_no, color)] = (vendor, style_no, code)
 
-    out_rows, skipped_keys = [], set()
+    # One dedupe index per vendor, built before the grid loop rather than
+    # inside it: _vendor_style_colors doesn't cache a failed fetch, so a
+    # per-group call re-ran a full paginated request for every grid whenever
+    # Heartland was unreachable.
+    dedupe = {v: dedupe_index_for_vendor(v, resolve_vendor_id(v))
+              for v in sorted({v for (v, _s, _c) in groups})}
+
+    out_rows, skipped_keys, unchecked = [], set(), 0
     detail_lines, unrecognized = [], []
     for key, g in groups.items():
         vendor, style_no, color = key
-        vendor_id = resolve_vendor_id(vendor)
-        if heartland_grid_exists(vendor_id, style_no, color):
-            skipped_keys.add(key)
-            detail_lines.append(f"  SKIP (already exists in Heartland): {style_no} / {color} ({vendor})")
-            continue
+        by_style = dedupe[vendor]
+        style_key = str(style_no).strip().upper()
+        if by_style is None:
+            unchecked += 1
+        else:
+            existing = by_style.get(style_key, set())
+            if _color_match_key(color) in existing:
+                skipped_keys.add(key)
+                detail_lines.append(f"  SKIP (already exists in Heartland): {style_no} / {color} ({vendor})")
+                continue
+            if existing:
+                # The style is in Heartland but not in this colour. Usually a
+                # genuinely new colourway -- but it is also exactly what a
+                # colour spelled differently looks like, which is how the
+                # Generation Love 'BLACK/CREAM' vs 'BLACK / CREAM' duplicate
+                # got in. Cheap to print, and the reviewer can settle it.
+                print(f"  NOTE: {style_no} is new in '{color}', but Heartland "
+                      f"already has {style_no} in: {', '.join(sorted(existing))}. "
+                      f"If one of those is the same colour spelled differently, "
+                      f"delete this grid before importing.")
         desc = title_caps(fix_mojibake(g["style_name_raw"]))
         if g["is_ring"] and _size_encoded_in_style_number(style_no, g["sizes"]):
             # One style number per size: complete nothing, or every sibling
@@ -1493,8 +1683,16 @@ def build_grids(joor_rows, out_path):
     write_xlsx(out_path, TEMPLATE_HEADERS, out_rows,
                text_cols=("Item Grid #", "Style Number"), dropdowns=DROPDOWN_LISTS)
     print(f"wrote {out_path} ({len(out_rows)} grid(s))")
-    if skipped_keys:
-        print(f"  skipped {len(skipped_keys)} grid(s) already existing in Heartland")
+    print(f"  duplicate check: {len(skipped_keys)} grid(s) skipped as already in "
+          f"Heartland, {len(out_rows) - unchecked} checked and new, "
+          f"{unchecked} emitted UNCHECKED")
+    if unchecked:
+        print(f"  WARNING: {unchecked} grid(s) could not be checked against "
+              f"Heartland (see the reasons above) -- review those before importing.")
+    if unrecognized:
+        print(f"  NOTE: the {len(unrecognized)} grid(s) with Generate Items = false "
+              f"create no items, so they will show as 'new' again on the next run "
+              f"until you add their sizes in Heartland.")
 
 # ------------------------- phase 2: PO ---------------------------------------
 PO_HEADERS = ["PO #", "PO Description", "PO Vendor", "PO Start Ship", "PO End Ship", "PO Received at location",
@@ -1515,15 +1713,6 @@ RECEIVED_AT_LOCATION = "romi boutique"   # Heartland requires this field on PO i
 # Helper columns are parenthesized on purpose: Heartland won't auto-map them,
 # so they import as Ignored and can't overwrite anything.
 
-def _size_sort_key(size):
-    s = str(size).strip().upper()
-    if s in LETTER_LADDER:
-        return (0, LETTER_LADDER.index(s), "")
-    try:
-        return (1, float(s), "")
-    except ValueError:
-        return (2, 0, s)
-
 def _iget(it, *keys):
     """First non-empty value among several possible header names. Heartland's
     ITEMS export uses unprefixed headers (Description, Color, Size, Style
@@ -1542,8 +1731,13 @@ def build_po(joor_rows, out_path):
     joor_rows = consolidate_size_suffixes(joor_rows)
     clear_item_index_cache()   # items may have been generated since the last run
     out_rows, missing = [], []
+    resolved = {}              # raw seller_account -> Heartland name, so the
+                               # NOTE/WARNING prints once per vendor, not per line
     for r in joor_rows:
-        vendor = normalize_vendor(r["seller_account"])
+        raw_vendor = r["seller_account"]
+        if raw_vendor not in resolved:
+            resolved[raw_vendor] = normalize_vendor(raw_vendor)
+        vendor = resolved[raw_vendor]
         vendor_id = resolve_vendor_id(vendor)
         index = heartland_vendor_item_index(vendor_id)
         if index is None:
@@ -1553,10 +1747,7 @@ def build_po(joor_rows, out_path):
         color = normalize_color(r["color"])
         size = canonical_size_token(r["size"])
         style_key = r["style_number"].strip().upper()
-        item_no = next((index[k] for k in
-                        ((style_key, c.upper(), size.upper())
-                         for c in _color_variants(color))
-                        if k in index), None)
+        item_no = index.get((style_key, _color_match_key(color), size.upper()))
         if not item_no:
             missing.append((r["style_number"], color, r["size"])); continue
         cost = float(r["item_price"])
