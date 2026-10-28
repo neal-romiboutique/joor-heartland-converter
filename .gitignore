@@ -222,3 +222,4 @@ __marimo__/
 # the repo root or live dedupe and PO item lookup are silently skipped.
 *.xlsx
 .DS_Store
+.claude/

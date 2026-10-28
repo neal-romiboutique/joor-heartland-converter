@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Romi Boutique Order Converter — Guide</title>
+<style>
+  :root{
+    --ink:#2b2b2b; --soft:#8a8a8a; --line:#e3ded6; --bg:#faf8f4;
+    --accent:#5b4636; --panel:#fff; --term:#1f1d1a; --termink:#e8e4dc;
+    --warn:#a8712c; --stop:#8f3b34;
+  }
+  *{box-sizing:border-box}
+  body{font-family:-apple-system,"Helvetica Neue",Arial,sans-serif;background:var(--bg);
+       color:var(--ink);max-width:820px;margin:0 auto;padding:44px 24px 90px;line-height:1.6}
+  header{border-bottom:1px solid var(--line);padding-bottom:18px}
+  h1{font-weight:600;font-size:25px;letter-spacing:.2px;margin:0}
+  h1 small{color:var(--soft);font-weight:400;font-size:14px;margin-left:10px;letter-spacing:0}
+  .sub{color:var(--soft);font-size:13.5px;margin:6px 0 0}
+  .tabs{display:flex;gap:8px;flex-wrap:wrap;margin:22px 0 26px}
+  .tab{padding:8px 18px;border:1px solid var(--line);border-radius:20px;cursor:pointer;
+       background:#fff;font-size:14px;color:var(--ink);font-family:inherit}
+  .tab:hover{border-color:var(--accent)}
+  .tab[aria-selected="true"]{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .tab:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  section[hidden]{display:none}
+  h2{font-size:19px;font-weight:600;margin:34px 0 4px}
+  h2:first-of-type{margin-top:0}
+  h3{font-size:15px;font-weight:600;margin:26px 0 4px}
+  .step{color:var(--soft);font-size:12px;letter-spacing:.14em;text-transform:uppercase;
+        display:block;margin-bottom:2px}
+  p{margin:8px 0}
+  ul{margin:8px 0;padding-left:20px}
+  li{margin:4px 0}
+  code{font:13px/1.5 ui-monospace,Menlo,monospace;background:#fff;border:1px solid var(--line);
+       border-radius:5px;padding:1px 5px}
+  pre{background:#fff;border:1px solid var(--line);border-radius:10px;padding:12px 14px;
+      overflow-x:auto;font:13px/1.6 ui-monospace,Menlo,monospace;margin:10px 0}
+  pre code{border:0;background:none;padding:0}
+  .log{background:var(--term);color:var(--termink);border:0}
+  .log code{color:var(--termink)}
+  .note{border-left:3px solid var(--warn);background:#fff;padding:10px 14px;margin:14px 0;
+        border-radius:0 8px 8px 0;font-size:14.5px}
+  .stop{border-left-color:var(--stop)}
+  .note b{color:var(--accent)}
+  .stop b{color:var(--stop)}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:14px}
+  th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--soft);font-weight:600;font-size:12.5px;letter-spacing:.04em;text-transform:uppercase}
+  footer{margin-top:48px;padding-top:16px;border-top:1px solid var(--line);
+         color:var(--soft);font-size:12.5px}
+  @media print{.tabs{display:none}section[hidden]{display:block}
+    section{page-break-before:always}section:first-of-type{page-break-before:auto}}
+</style></head><body>
+
+<header>
+  <h1>Romi Boutique Order Converter <small>JOOR &amp; NuOrder → Heartland</small></h1>
+  <p class="sub">Turns a wholesale order export into Heartland import files. Grids first, then the PO.</p>
+</header>
+
+<div class="tabs" role="tablist">
+  <button class="tab" role="tab" id="t1" aria-controls="p1" aria-selected="true">1 · Setup</button>
+  <button class="tab" role="tab" id="t2" aria-controls="p2" aria-selected="false">2 · JOOR</button>
+  <button class="tab" role="tab" id="t3" aria-controls="p3" aria-selected="false">3 · NuOrder</button>
+</div>
+
+<!-- ───────────────────────── TAB 1 ───────────────────────── -->
+<section id="p1" role="tabpanel" aria-labelledby="t1">
+
+<h2>Setup</h2>
+<p>Do this once per Mac. It takes about ten minutes.</p>
+
+<h3><span class="step">One</span>Install Apple's Command Line Tools</h3>
+<p>A fresh Mac has <code>python3</code> and <code>git</code> in name only — typing either one just
+opens a window asking you to install the developer tools first. Get that out of the way. Open
+Terminal (Spotlight → "Terminal") and paste:</p>
+<pre><code>xcode-select --install</code></pre>
+<p>A dialog appears. Click <b>Install</b>, agree to the licence, and wait — it's a few GB and can
+take 10–30 minutes. When it finishes, confirm both tools answer:</p>
+<pre><code>python3 --version
+git --version</code></pre>
+<div class="note">Already installed? You'll see
+<code>command line tools are already installed</code>. That's fine — skip to step two.</div>
+
+<h3><span class="step">Two</span>Install the two Python libraries</h3>
+<pre><code>python3 -m pip install --user requests openpyxl</code></pre>
+
+<h3><span class="step">Three</span>Clone the folder onto the Desktop</h3>
+<pre><code>cd ~/Desktop
+git clone https://github.com/neal-romiboutique/joor-heartland-converter.git</code></pre>
+<p>A <b>joor-heartland-converter</b> folder appears on the Desktop. Leave it there — everything
+below assumes that's where it lives.</p>
+<div class="note stop"><b>Don't AirDrop the whole folder.</b> AirDrop strips the hidden
+<code>.git</code> data, and the folder can no longer pull updates. Always clone.</div>
+
+<h3><span class="step">Four</span>Add the private file</h3>
+<p>One file is deliberately kept out of GitHub and has to be copied from a Mac that already
+runs the converter:</p>
+<div class="note"><b>If you already know you received this file, you can skip this step.</b>
+Just make sure it's sitting in the <b>joor-heartland-converter</b> folder on your Desktop.</div>
+<table>
+  <tr><th>File</th><th>What it holds</th></tr>
+  <tr><td><code>.env</code></td><td>The Heartland API token and subdomain. Without it the app still
+      builds grid files, but it can't check Heartland for duplicates and can't build a PO at all.</td></tr>
+</table>
+
+<p><b>On a Mac that already has them</b> — Salam's blue iMac and Dinhe's laptop both do:</p>
+<ul>
+  <li>Open the <b>joor-heartland-converter</b> folder in Finder.</li>
+  <li><code>.env</code> is hidden — macOS hides any filename
+      starting with a dot. Press <b>Cmd + Shift + .</b> (period) and it appears, greyed out.
+      The same shortcut hides it again afterwards.</li>
+  <li>Select <code>.env</code>, right-click → <b>Share → AirDrop</b>, and pick the new Mac. Both Macs
+      need Wi-Fi and Bluetooth on, and AirDrop set to <b>Contacts Only</b> or <b>Everyone</b>
+      in Control Centre.</li>
+</ul>
+
+<p><b>On the new Mac:</b> accept the transfer — it lands in <b>Downloads</b>, and
+<code>.env</code> will be invisible there too, so press <b>Cmd + Shift + .</b> again to see it.
+Drag it into the <b>joor-heartland-converter</b> folder on the Desktop. It sits loose in the
+folder, next to <code>order_to_heartland.py</code> — not in a subfolder.</p>
+
+
+<h3><span class="step">Five</span>Open it</h3>
+<p>Double-click <code>Order Converter.command</code>. A Terminal window opens and a browser tab
+follows a second later. The first time, macOS may block it — right-click the file, choose
+<b>Open</b>, then <b>Open</b> again.</p>
+<div class="note"><b>Leave the Terminal window open</b> while you work. While all the conversion
+happens in the browser tab, it needs the terminal window to stay open, otherwise the browser
+can't contact your computer's memory.</div>
+
+<h3><span class="step">Six</span>Getting updates later</h3>
+<p>Double-click <code>Pull_Updates.command</code> in the same folder. Then <b>fully quit the
+converter and relaunch it</b> — the app loads its conversion code once at startup and holds it
+for the session, so an update won't take effect until you restart.</p>
+
+<h3>When something looks wrong</h3>
+<table>
+  <tr><th>What you see</th><th>What to do</th></tr>
+  <tr><td>A window pops up offering to install developer tools</td>
+      <td>Step one didn't finish. Click Install, wait it out, then carry on.</td></tr>
+  <tr><td>Double-clicking does nothing</td>
+      <td>In Terminal: <code>chmod +x ~/Desktop/joor-heartland-converter/*.command</code></td></tr>
+  <tr><td><code>vendor_id_map.py not found</code> in the log</td>
+      <td>The clone is incomplete. Double-click <code>Pull_Updates.command</code>; if it persists, re-clone.</td></tr>
+  <tr><td>You can't find <code>.env</code> anywhere</td>
+      <td>It's hidden, not missing. Press <b>Cmd + Shift + .</b> in Finder to show it.</td></tr>
+  <tr><td>Grids build fine but the PO tab errors</td>
+      <td><code>.env</code> is missing or the token is wrong — the PO needs live Heartland access.</td></tr>
+  <tr><td><code>vendor '…' not found in the known Heartland vendor list</code></td>
+      <td>New brand. Confirm the exact name under Purchasing → Vendors in Heartland before
+      importing, or the import creates a second, duplicate vendor record.</td></tr>
+  <tr><td>Browser says it can't reach the converter</td>
+      <td>The Terminal window was closed. Relaunch.</td></tr>
+</table>
+
+</section>
+
+<!-- ───────────────────────── TAB 2 ───────────────────────── -->
+<section id="p2" role="tabpanel" aria-labelledby="t2" hidden>
+
+<h2>JOOR orders</h2>
+<p>Two passes over the <i>same</i> export file. <b>Pass one, the grids import, is the required
+one</b> — it creates the products in Heartland. <b>Pass two, the PO import, is optional</b>: it
+saves you from typing the purchase order in by hand, but you can always build the PO in Heartland
+yourself instead.</p>
+
+<div class="note stop"><b>The grids import has to come first, and has to be finished.</b> The PO
+file is built from Item #s that don't exist until the grids import generates them. Run the PO tab
+first and it either produces an empty file or warns that nothing matched.</div>
+
+<h3><span class="step">Before you start</span>Export from JOOR</h3>
+<ul>
+  <li>Either JOOR format works — Basic Export (one row per size) or Order to Size (sizes across
+      the top). Prefer <b>Download Order Summary Excel</b>: it carries real color names.</li>
+  <li><b>Don't open the export in Excel first.</b> Excel quietly rewrites values on save — style
+      numbers become floats, size tokens like <code>00-14</code> become dates.</li>
+</ul>
+
+<h3><span class="step">Pass one · required</span>JOOR Grids Import</h3>
+<p>Drag the export onto the drop area, click <b>Convert</b>. A file named
+<code>…_GRIDS_IMPORT.xlsx</code> lands in Downloads.</p>
+
+<p>The dark log panel is the point of the screen — read it before importing anything. One line
+per grid:</p>
+<pre class="log"><code>  Jersey Deep V Tee / Burnt Fig: ordered ['S', 'M'] -> [letters]
+  generated ['XS', 'S', 'M', 'L']  | price $145 (JOOR Sugg. Retail)</code></pre>
+<ul>
+  <li><b>SKIP (already exists in Heartland)</b> — that style/color is already in the system and was
+      left out of the file on purpose.</li>
+  <li><b>WARNING: unrecognized size convention</b> — the grid is still written, but with
+      <code>Generate Items = false</code>. Heartland will create the grid empty and you add the
+      sizes by hand.</li>
+  <li><b>NOTE: color … looks like a vendor code</b> — you got <code>C0308</code> instead of
+      <code>Cardinal Red</code>. Re-download from JOOR using Order Summary Excel.</li>
+</ul>
+
+<p>What the converter decides for you:</p>
+<table>
+  <tr><th>Field</th><th>Rule</th></tr>
+  <tr><td>Sizes</td><td>Fills out the store's base run around what was ordered — letters XS–L,
+      even numeric 0–10, denim 24–29, euro 70–90, rings 6–8, or just <code>OS</code>. Ordering
+      outside the base run extends the ladder rather than replacing it.</td></tr>
+  <tr><td>Price</td><td>JOOR's Sugg. Retail if present, otherwise 2.4 × cost. Always rounded up
+      to a whole dollar.</td></tr>
+  <tr><td>Color</td><td>Title case, with slashes turned into ampersands
+      (<code>BLUE/BLACK</code> → <code>Blue &amp; Black</code>). <code>W/</code> is left alone —
+      it means "with."</td></tr>
+  <tr><td>Description</td><td>Title case, with the style number stripped off the front if the
+      vendor prefixed it.</td></tr>
+  <tr><td>Duplicates</td><td>Checked live against Heartland on vendor + style number + color,
+      in both the current and the older slash color format.</td></tr>
+</table>
+
+<p><b>Optional, but worth doing now:</b> open the downloaded file and fill the four dropdown
+columns — <b>Shopify Category</b>, <b>Shopify Color</b>, <b>Category</b>, <b>Active fit guide</b>.
+The import works fine without them; you'd just be filling them in grid by grid in Heartland later
+instead of once here. Everything else in the file is ready as-is.</p>
+
+<p>Import at <b>Inventory → Item Grids → Import</b>. All columns auto-map by name; leave
+<code>Generate Items = true</code> alone, or Heartland rejects the file.</p>
+
+<div class="note"><b>Check one grid before moving on.</b> Open a grid Heartland just created and
+confirm the item count matches the number of sizes in the ladder. Doubled items mean something
+went wrong with Generate Items.</div>
+
+<h3><span class="step">Pass two · optional</span>JOOR PO Import</h3>
+<p>Skip this if you'd rather build the PO in Heartland by hand. If you use it, run it
+<b>only after the grids import has completed</b> and the items exist in Heartland. Switch to the
+<b>JOOR PO Import</b> tab and drop the <i>same</i> export again — no items export needed, Item #s
+are looked up live from Heartland. You get <code>…_PO_IMPORT.xlsx</code>.</p>
+
+<div class="note"><b>WARNING: N JOOR line(s) had no matching Heartland item.</b> The vendor's
+items loaded fine, so those specific style/color/size combos simply aren't in Heartland yet.
+Fix the grids, then run this tab again — don't import a short PO.</div>
+
+<p>Import at <b>Purchasing → Purchase Orders → Import</b>. Then, in Heartland:</p>
+<ul>
+  <li>The <b>PO #</b> column reads <code>CHECK HEARTLAND HIGHEST PO#</code> — a placeholder,
+      because Heartland requires the field but won't auto-number on import. Look up the highest
+      existing PO number and set it yourself.</li>
+  <li>The JOOR order number is in <b>PO Description</b>, so it stays searchable.</li>
+  <li>The PO arrives as <b>Pending</b>. Open it manually to finish.</li>
+</ul>
+
+</section>
+
+<!-- ───────────────────────── TAB 3 ───────────────────────── -->
+<section id="p3" role="tabpanel" aria-labelledby="t3" hidden>
+
+<h2>NuOrder orders</h2>
+<p><b>Grids only.</b> There's no NuOrder PO tab — once the grids are in Heartland, build the PO
+there by selecting them.</p>
+
+<h3><span class="step">One</span>Export from NuOrder</h3>
+<p>Export the order as xlsx. The file needs the <b>NuORDER Order Data</b> tab — that's the sheet
+the converter reads. The Summary tab is ignored. Don't open it in Excel first.</p>
+
+<h3><span class="step">Two</span>Type the vendor name</h3>
+<p>NuOrder never puts the brand name in the file, so the <b>Vendor</b> box appears on this tab and
+has to be filled in before Convert unlocks.</p>
+<div class="note stop"><b>It must match Heartland exactly.</b> Check the spelling against
+Purchasing → Vendors first. A near-miss creates a duplicate vendor record.</div>
+
+<h3><span class="step">Three</span>Convert and check the log</h3>
+<pre class="log"><code>  [nuorder] vendor='Mother'  38 ordered line(s);
+  skipped 112 zero-qty size row(s)</code></pre>
+<p>The skipped rows are expected. NuOrder exports the vendor's entire size run whether or not you
+bought it, so anything with a blank Qty was offered, not ordered. If the skipped number looks far
+too high, confirm you exported the placed order and not a linesheet.</p>
+
+<p>Reading the columns:</p>
+<table>
+  <tr><th>NuOrder column</th><th>Becomes</th></tr>
+  <tr><td>Qty × Units Per Pack</td><td>Quantity ordered — packs are multiplied out</td></tr>
+  <tr><td>Wholesale (USD)</td><td>Default Cost</td></tr>
+  <tr><td>M.S.R.P (USD)</td><td>Price, if present; otherwise 2.4 × cost, rounded up</td></tr>
+  <tr><td>Name</td><td>Description, with the style number stripped off the front</td></tr>
+</table>
+
+<h3><span class="step">Four</span>Import into Heartland</h3>
+<p>Same as JOOR: fill the four dropdown columns in the downloaded file, then
+<b>Inventory → Item Grids → Import</b>. Build the PO in Heartland afterwards.</p>
+
+<h3>If you drop the wrong file</h3>
+<p>A NuOrder file dropped on a JOOR tab stops with an error telling you to use the NuOrder tab.
+Nothing is written, so just switch tabs and try again.</p>
+
+</section>
+
+<footer>Romi Boutique · internal tool guide · questions to Neal</footer>
+
+<script>
+  var tabs = Array.prototype.slice.call(document.querySelectorAll('.tab'));
+  function show(tab){
+    tabs.forEach(function(t){
+      var sel = t === tab;
+      t.setAttribute('aria-selected', sel);
+      document.getElementById(t.getAttribute('aria-controls')).hidden = !sel;
+    });
+    tab.focus();
+  }
+  tabs.forEach(function(t, i){
+    t.addEventListener('click', function(){ show(t); });
+    t.addEventListener('keydown', function(e){
+      if (e.key === 'ArrowRight') show(tabs[(i + 1) % tabs.length]);
+      if (e.key === 'ArrowLeft')  show(tabs[(i - 1 + tabs.length) % tabs.length]);
+    });
+  });
+</script>
+</body></html>

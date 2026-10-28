@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """
-JOOR -> Heartland converter: drag-and-drop app.  (companion to joor_to_heartland.py)
+JOOR / NuOrder -> Heartland converter: drag-and-drop app.  (companion to order_to_heartland.py)
 
-Run:  python3 joor_converter_app.py     (or double-click "JOOR Converter.command")
-A browser page opens. Drag the JOOR export in, click Convert, and the
+Run:  python3 converter_app.py     (or double-click "Order Converter.command")
+A browser page opens. Drag the order export in, click Convert, and the
 Heartland import spreadsheet downloads to your Downloads folder.
 
-All conversion logic lives in joor_to_heartland.py (must be in the same
+All conversion logic lives in order_to_heartland.py (must be in the same
 folder); this file is only the user interface around it.
 """
 import base64, io, json, socket, sys, tempfile, threading, traceback, webbrowser, zipfile
@@ -16,9 +16,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
-        from order_to_heartland import read_joor, read_nuorder, build_grids, build_po
+    from order_to_heartland import read_joor, read_nuorder, build_grids, build_po
 except ImportError:
-    sys.exit("ERROR: joor_to_heartland.py must be in the same folder as this app.")
+    sys.exit("ERROR: order_to_heartland.py must be in the same folder as this app.")
 
 PAGE = """<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Romi Boutique Order Converter</title>
@@ -223,7 +223,7 @@ def main():
         port = s.getsockname()[1]
     srv = ThreadingHTTPServer(("127.0.0.1", port), Handler)
     url = f"http://127.0.0.1:{port}/"
-    print(f"JOOR -> Heartland converter running at {url}")
+    print(f"Romi Boutique Order Converter running at {url}")
     print("Leave this window open while you work; close it to quit.")
     threading.Timer(0.6, lambda: webbrowser.open(url)).start()
     try:

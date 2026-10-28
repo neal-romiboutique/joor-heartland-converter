@@ -32,7 +32,6 @@ Two files do everything:
 - **`order_to_heartland.py`** — all parsing, business rules, Heartland API calls, and xlsx writing.
 - **`converter_app.py`** — a stdlib `ThreadingHTTPServer` on `127.0.0.1` serving one hardcoded HTML page (`PAGE`) with three tabs. It base64s the uploaded file over `POST /convert`, calls into the converter with `stdout` redirected into a string, and returns `{log, files:[{name, b64}]}` which the page turns into browser downloads. It contains **zero** conversion logic — keep it that way.
 
-Docstrings and the import-error message still refer to `joor_to_heartland.py` / `joor_converter_app.py`; the files were renamed in commit `64d407a` and the text is stale.
 
 ### The long-row dict is the contract
 
@@ -125,4 +124,4 @@ Any failure (offline, bad token, empty response) falls back to the committed sna
 
 ## Local-only files
 
-`.env`, `*.xlsx`, and `vendor_id_map.py` are gitignored — order exports and generated import files contain live vendor pricing. `Pull_Updates.command` exists so the shop owner can `git pull` by double-clicking.
+`.env` and `*.xlsx` are gitignored — the token, and order exports / import files carrying live vendor pricing. `vendor_id_map.py` is tracked on purpose (offline vendor baseline; see `.gitignore`). `Pull_Updates.command` exists so the shop owner can `git pull` by double-clicking.
