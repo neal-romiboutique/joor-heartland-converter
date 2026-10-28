@@ -66,90 +66,68 @@
 <section id="p1" role="tabpanel" aria-labelledby="t1">
 
 <h2>Setup</h2>
-<p>Do this once per Mac. It takes about ten minutes.</p>
+<p>Do this once per Mac. No typing required.</p>
 
-<h3><span class="step">One</span>Install Apple's Command Line Tools</h3>
-<p>A fresh Mac has <code>python3</code> and <code>git</code> in name only — typing either one just
-opens a window asking you to install the developer tools first. Get that out of the way. Open
-Terminal (Spotlight → "Terminal") and paste:</p>
-<pre><code>xcode-select --install</code></pre>
-<p>A dialog appears. Click <b>Install</b>, agree to the licence, and wait — it's a few GB and can
-take 10–30 minutes. When it finishes, confirm both tools answer:</p>
-<pre><code>python3 --version
-git --version</code></pre>
-<div class="note">Already installed? You'll see
-<code>command line tools are already installed</code>. That's fine — skip to step two.</div>
+<h3><span class="step">One</span>Unzip and move the folder</h3>
+<p>Double-click the zip you were sent (it's in <b>Downloads</b>). A
+<b>joor-heartland-converter</b> folder appears. Drag that folder onto the <b>Desktop</b>
+and leave it there. Everything the converter needs is already inside it, including the
+Heartland connection details.</p>
+<div class="note stop"><b>Don't delete or move anything out of the folder.</b> Some files are
+hidden on purpose (their names start with a dot) — they're what connect the app to Heartland.</div>
 
-<h3><span class="step">Two</span>Install the two Python libraries</h3>
-<pre><code>python3 -m pip install --user requests openpyxl</code></pre>
-
-<h3><span class="step">Three</span>Clone the folder onto the Desktop</h3>
-<pre><code>cd ~/Desktop
-git clone https://github.com/neal-romiboutique/joor-heartland-converter.git</code></pre>
-<p>A <b>joor-heartland-converter</b> folder appears on the Desktop. Leave it there — everything
-below assumes that's where it lives.</p>
-<div class="note stop"><b>Don't AirDrop the whole folder.</b> AirDrop strips the hidden
-<code>.git</code> data, and the folder can no longer pull updates. Always clone.</div>
-
-<h3><span class="step">Four</span>Add the private file</h3>
-<p>One file is deliberately kept out of GitHub and has to be copied from a Mac that already
-runs the converter:</p>
-<div class="note"><b>If you already know you received this file, you can skip this step.</b>
-Just make sure it's sitting in the <b>joor-heartland-converter</b> folder on your Desktop.</div>
-<table>
-  <tr><th>File</th><th>What it holds</th></tr>
-  <tr><td><code>.env</code></td><td>The Heartland API token and subdomain. Without it the app still
-      builds grid files, but it can't check Heartland for duplicates and can't build a PO at all.</td></tr>
-</table>
-
-<p><b>On a Mac that already has them</b> — Salam's blue iMac and Dinhe's laptop both do:</p>
+<h3><span class="step">Two</span>Open it the first time</h3>
+<p>Double-click <b>Order Converter</b> inside the folder. Because the file came from an email,
+the Mac will block it the first time with a message like <i>“Apple could not verify…”</i> or
+<i>“…from an unidentified developer.”</i> This is expected. To allow it:</p>
 <ul>
-  <li>Open the <b>joor-heartland-converter</b> folder in Finder.</li>
-  <li><code>.env</code> is hidden — macOS hides any filename
-      starting with a dot. Press <b>Cmd + Shift + .</b> (period) and it appears, greyed out.
-      The same shortcut hides it again afterwards.</li>
-  <li>Select <code>.env</code>, right-click → <b>Share → AirDrop</b>, and pick the new Mac. Both Macs
-      need Wi-Fi and Bluetooth on, and AirDrop set to <b>Contacts Only</b> or <b>Everyone</b>
-      in Control Centre.</li>
+  <li>Click <b>Done</b> (or <b>OK</b>) on the warning.</li>
+  <li>Open <b>System Settings → Privacy &amp; Security</b> and scroll to the bottom. Next to the
+      message about “Order Converter”, click <b>Open Anyway</b>, then confirm with your password
+      or Touch ID.</li>
+  <li><i>Older Macs:</i> instead, right-click <b>Order Converter</b>, choose <b>Open</b>, then
+      <b>Open</b> again.</li>
 </ul>
+<p>You only do this once. After that, a plain double-click works.</p>
 
-<p><b>On the new Mac:</b> accept the transfer — it lands in <b>Downloads</b>, and
-<code>.env</code> will be invisible there too, so press <b>Cmd + Shift + .</b> again to see it.
-Drag it into the <b>joor-heartland-converter</b> folder on the Desktop. It sits loose in the
-folder, next to <code>order_to_heartland.py</code> — not in a subfolder.</p>
+<h3><span class="step">Three</span>Let first-time setup finish</h3>
+<p>A Terminal window opens and sets itself up. Two things may happen, both only once:</p>
+<ul>
+  <li><b>A window offers to install “developer tools.”</b> Click <b>Install</b>, agree, and wait
+      (10–30 minutes). When it's done, double-click <b>Order Converter</b> again.</li>
+  <li><b>“Installing helper libraries…”</b> appears for about a minute. Needs internet. Let it run.</li>
+</ul>
+<p>Then a browser tab opens with the converter. That's it — you're set up.</p>
 
+<h3><span class="step">Four</span>Everyday use</h3>
+<p>Double-click <b>Order Converter</b>. A Terminal window opens and the browser tab follows a
+second later.</p>
+<div class="note"><b>Leave the Terminal window open</b> while you work. The browser tab is just
+the screen; the Terminal window is the engine. Close it and the converter stops.</div>
 
-<h3><span class="step">Five</span>Open it</h3>
-<p>Double-click <code>Order Converter.command</code>. A Terminal window opens and a browser tab
-follows a second later. The first time, macOS may block it — right-click the file, choose
-<b>Open</b>, then <b>Open</b> again.</p>
-<div class="note"><b>Leave the Terminal window open</b> while you work. While all the conversion
-happens in the browser tab, it needs the terminal window to stay open, otherwise the browser
-can't contact your computer's memory.</div>
-
-<h3><span class="step">Six</span>Getting updates later</h3>
-<p>Double-click <code>Pull_Updates.command</code> in the same folder. Then <b>fully quit the
-converter and relaunch it</b> — the app loads its conversion code once at startup and holds it
-for the session, so an update won't take effect until you restart.</p>
+<h3><span class="step">Five</span>Getting updates later</h3>
+<p>Double-click <b>Pull_Updates</b> in the same folder, then close the converter's Terminal
+window and double-click <b>Order Converter</b> again. If it says it couldn't update, nothing is
+broken — ask Neal for the newest zip, then replace the old folder on the Desktop with the new one.</p>
 
 <h3>When something looks wrong</h3>
 <table>
   <tr><th>What you see</th><th>What to do</th></tr>
+  <tr><td>“Apple could not verify…” or “unidentified developer”</td>
+      <td>Expected the first time. Follow step two.</td></tr>
   <tr><td>A window pops up offering to install developer tools</td>
-      <td>Step one didn't finish. Click Install, wait it out, then carry on.</td></tr>
-  <tr><td>Double-clicking does nothing</td>
-      <td>In Terminal: <code>chmod +x ~/Desktop/joor-heartland-converter/*.command</code></td></tr>
-  <tr><td><code>vendor_id_map.py not found</code> in the log</td>
-      <td>The clone is incomplete. Double-click <code>Pull_Updates.command</code>; if it persists, re-clone.</td></tr>
-  <tr><td>You can't find <code>.env</code> anywhere</td>
-      <td>It's hidden, not missing. Press <b>Cmd + Shift + .</b> in Finder to show it.</td></tr>
+      <td>Click Install, wait it out, then double-click Order Converter again.</td></tr>
+  <tr><td>“Setup failed” in the Terminal window</td>
+      <td>Check the Wi-Fi and double-click again. Still failing? Send Neal a photo of the window.</td></tr>
   <tr><td>Grids build fine but the PO tab errors</td>
-      <td><code>.env</code> is missing or the token is wrong — the PO needs live Heartland access.</td></tr>
+      <td>The hidden Heartland connection file is missing or out of date. Re-download the zip from
+      Neal and replace the folder.</td></tr>
   <tr><td><code>vendor '…' not found in the known Heartland vendor list</code></td>
       <td>New brand. Confirm the exact name under Purchasing → Vendors in Heartland before
-      importing, or the import creates a second, duplicate vendor record.</td></tr>
+      importing, or the import creates a second, duplicate vendor record. You can type the
+      exact name into the Vendor override box.</td></tr>
   <tr><td>Browser says it can't reach the converter</td>
-      <td>The Terminal window was closed. Relaunch.</td></tr>
+      <td>The Terminal window was closed. Double-click Order Converter again.</td></tr>
 </table>
 
 </section>
